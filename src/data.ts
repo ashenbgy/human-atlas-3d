@@ -42,7 +42,8 @@ export async function loadWorld() {
       })
     }
     pieces = manifest.pieces.filter((e) => geos.has(e.id)).map((e) => ({ e, geo: geos.get(e.id)! }))
-  } catch {
+  } catch (err) {
+    console.warn('Anatomy assets failed to load; showing placeholder geometry.', err)
     pieces = []
   }
   world.placeholder = pieces.length === 0
