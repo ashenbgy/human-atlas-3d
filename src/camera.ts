@@ -30,5 +30,5 @@ export function pieceBox(p: Piece): Box3 {
 /** focusOnObject: bounding box -> centre + distance -> tween camera & controls target. */
 export const focusPiece = (id: string) => {
   const p = world.byId.get(id)
-  if (p) cam.fitBox(pieceBox(p), 2.4)
+  if (p) cam.fitBox(pieceBox(p), 1.7)
 }

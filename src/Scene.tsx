@@ -26,7 +26,11 @@ function CameraRig() {
     cam.fitBox = (box: Box3, pad = 1.2, front = false) => {
       const c = box.getCenter(new Vector3()), sz = box.getSize(new Vector3())
       const t = Math.tan(MathUtils.degToRad(camera.fov) / 2)
-      const d = Math.max(0.12, Math.max(sz.y / (2 * t), sz.x / (2 * t * camera.aspect)) * pad + sz.z / 2)
+      // fit inside the area the floating panels leave clear, not the whole canvas
+      const W = innerWidth, H = innerHeight
+      const mx = W > 760 ? 250 : W * 0.05, my = H > 500 ? 120 : H * 0.1 // panel margins; mobile panels overlay anyway
+      const fx = 1 - (2 * mx) / W, fy = 1 - (2 * my) / H
+      const d = Math.max(0.12, Math.max(sz.y / (2 * t * fy), sz.x / (2 * t * camera.aspect * fx)) * pad + sz.z / 2)
       const dir = front ? FRONT.clone() : camera.position.clone().sub(controls.target).normalize()
       go(c.clone().addScaledVector(dir, d), c)
     }
@@ -36,7 +40,7 @@ function CameraRig() {
     }
     // initial framing, no animation
     const b = viewBox()
-    cam.fitBox(b, 1.5, true)
+    cam.fitBox(b, 1.1, true)
     const t = tw.current!
     camera.position.copy(t.p1)
     controls.target.copy(t.c1)

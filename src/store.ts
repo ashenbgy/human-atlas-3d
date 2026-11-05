@@ -45,25 +45,25 @@ export const useStore = create<State>()((set, get) => ({
   clear: () => set({ selectedId: null, isolate: false }),
   setExplode: (v) => {
     set({ explode: v, region: null })
-    cam.fitBox(viewBox(), 1.5)
+    cam.fitBox(viewBox(), 1.1)
   },
   setRegion: (r) => {
     const next = r === get().region ? null : r
     if (!next) {
       set({ region: null, selectedId: null, isolate: false })
-      cam.fitBox(viewBox(), 1.5)
+      cam.fitBox(viewBox(), 1.1)
       return
     }
     buildSheet(next, get().side)
     set({ region: next, explode: 0, systems: all(true), selectedId: null, isolate: false })
-    cam.fitBox(sheet.box, 1.9, true)
+    cam.fitBox(sheet.box, 1.3, true)
   },
   setSide: (side) => {
     set({ side })
     const r = get().region
     if (r) {
       buildSheet(r, side)
-      cam.fitBox(sheet.box, 1.9, true)
+      cam.fitBox(sheet.box, 1.3, true)
     }
   },
 }))

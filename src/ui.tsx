@@ -143,7 +143,7 @@ export function Search() {
 export function Toolbar() {
   const tool = useStore((s) => s.tool)
   const set = (tool: 'orbit' | 'pan') => useStore.setState({ tool })
-  const front = () => cam.fitBox(viewBox(), 1.5, true)
+  const front = () => cam.fitBox(viewBox(), 1.1, true)
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if ((e.key === 'f' || e.key === 'F') && !(e.target instanceof HTMLInputElement)) front()
