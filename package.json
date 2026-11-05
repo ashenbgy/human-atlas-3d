@@ -1,0 +1,38 @@
+{
+  "name": "human-atlas",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "build:anatomy": "tsx scripts/build-anatomy.ts"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.114.0",
+    "@react-three/fiber": "^8.17.0",
+    "@react-three/postprocessing": "^2.19.1",
+    "framer-motion": "^11.11.0",
+    "n8ao": "^2.0.1",
+    "postprocessing": "^6.39.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.169.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.0.0",
+    "@gltf-transform/extensions": "^4.0.0",
+    "@gltf-transform/functions": "^4.0.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "meshoptimizer": "^0.22.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.5.4",
+    "vite": "^5.4.0"
+  }
+}
