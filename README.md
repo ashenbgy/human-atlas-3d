@@ -59,15 +59,6 @@ The script:
 The 366 files it can't classify (mostly organs outside the 8 systems, such as liver or skin) are logged to
 `scripts/unclassified.log` rather than guessed.
 
-## What I would do differently
-
-_Draft. Rewrite this in your own words._
-
-I would inspect the dataset before writing the pipeline. BodyParts3D turned out to be Z-up and to list every file under all of
-its parent concepts, and those two wrong assumptions silently broke the first build. I would also merge or instance the meshes
-per system from the start, because one draw call per piece is the main performance ceiling. Finally, I would add visual checks
-for camera framing early: the atlas sliding under the UI panels on smaller laptops was only caught while recording the demo GIF.
-
 ## Known gaps
 
 - No instancing or LOD, so there is one draw call per piece.
