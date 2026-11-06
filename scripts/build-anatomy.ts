@@ -29,14 +29,21 @@ const walk = (d: string): string[] =>
 
 // First matching rule wins. Order matters (e.g. brain ventricles before heart ventricles).
 const RULES: [SystemId, RegExp][] = [
-  ['nervous', /brain|cerebr|cerebell|lateral ventricle|third ventricle|fourth ventricle|spinal cord|nerve(?!.*eye)|ganglion|plexus|gyrus|thalam|medulla|\bpons\b|midbrain|hippocamp|amygdal|corpus callosum|caudate|putamen|globus|fornix|pituitary|brainstem/i],
-  ['sensory', /eyeball|\beye\b|cornea|\biris\b|retina|\blens\b|sclera|choroid|vitreous|cochlea|semicircular|tympanic membrane|auricle|\btongue\b|olfactory|optic/i],
-  ['heart', /\bheart\b|ventricle|atrium|atrial|cardiac|mitral|tricuspid|papillary|chordae|myocardi|pericardi|endocardi/i],
-  ['respiratory', /\blung|bronch|trachea|larynx|pleura|alveol|epiglottis|nasal cavity/i],
-  ['arteries', /\bartery\b|arteries|aorta|aortic|arteriole/i],
+  ['endocrine', /(adrenal|suprarenal) gland|thyroid gland|parathyroid|pituitary|pineal|hypophysis/i],
+  ['skin', /integumentary|\bskin\b|hair of|eyebrow|eyelash/i],
+  ['nervous', /brain|cerebr|cerebell|lateral ventricle|third ventricle|fourth ventricle|spinal cord|nerve(?!.*eye)|ganglion|plexus|gyrus|thalam|medulla|\bpons\b|midbrain|hippocamp|amygdal|corpus callosum|caudate|putamen|globus|fornix|brainstem|(frontal|parietal|occipital|temporal|limbic) lobe|lobule|insula|colliculus|geniculate|mammillary|habenula|commissure|internal capsule|lamina terminalis|stria terminalis|archicortex|metencephalon|telencephalon|neuraxis|decussation|dura mater|subarachnoid/i],
+  ['sensory', /eyeball|\beye\b|cornea|\biris\b|retina|\blens\b|sclera|choroid|vitreous|cochlea|semicircular|tympanic membrane|auricle|\btongue\b|olfactory|optic|eyelid/i],
+  ['heart', /\bheart\b|ventricle|atrium|atrial|cardiac|mitral|tricuspid|papillary|chordae|myocardi|pericardi|endocardi|cusp of (pulmonary|aortic) valve|pulmonary valve|coronary sinus/i],
+  ['respiratory', /\blung|bronch|trachea|larynx|pleura|alveol|epiglottis|nasal cavity|vocal ligament|conus elasticus|thyro-epiglottic|cricothyroid ligament|internal nose|nasal septum/i],
+  ['arteries', /\bartery\b|arteries|aorta|aortic|arteriole|arteria\b|arterial|palmar arch|celiac trunk|thyrocervical trunk|costocervical trunk/i],
   ['veins', /\bvein\b|veins|vena cava|venous/i],
-  ['muscles', /muscle|brachii|femoris|gracilis|sartorius|deltoid|pectoralis|trapezius|latissimus|gluteus|gastrocnemius|soleus|\brectus\b|oblique|iliacus|psoas|masseter|temporalis|sternocleidomastoid|tendon|aponeurosis|serratus|rhomboid|teres|supraspinatus|infraspinatus|subscapularis|brachialis|brachioradialis|pronator|supinator|flexor|extensor|abductor|adductor|lumbrical|interosse|opponens|tibialis|peroneus|fibularis|plantaris|popliteus|semimembranosus|semitendinosus|vastus|tensor fasciae|pectineus|piriformis|obturator|gemellus|quadratus|diaphragm|levator|platysma|buccinator|orbicularis|zygomaticus|mentalis|digastric|omohyoid|sternohyoid|thyrohyoid|splenius|longissimus|iliocostalis|multifidus|erector/i],
-  ['skeleton', /bone|vertebra|\brib\b|sternum|skull|cranium|femur|tibia|fibula|humerus|\bradius|\bulna|scapula|clavicle|patella|phalanx|phalanges|metacarpal|metatarsal|carpal|tarsal|sacrum|coccyx|mandible|maxilla|hyoid|talus|calcaneus|cuneiform|cuboid|navicular|scaphoid|lunate|triquetr|pisiform|trapezium|trapezoid|capitate|hamate|ilium|ischium|pubis|cartilage|sphenoid|ethmoid|vomer|palatine|lacrimal|malleus|incus|stapes/i],
+  ['muscles', /muscle|brachii|femoris|gracilis|sartorius|deltoid|pectoralis|trapezius|latissimus|gluteus|gastrocnemius|soleus|\brectus\b|oblique|iliacus|psoas|masseter|temporalis|sternocleidomastoid|tendon|aponeurosis|serratus|rhomboid|teres|supraspinatus|infraspinatus|subscapularis|brachialis|brachioradialis|pronator|supinator|flexor|extensor|abductor|adductor|lumbrical|interosse|opponens|tibialis|peroneus|fibularis|plantaris|popliteus|semimembranosus|semitendinosus|vastus|tensor fasciae|pectineus|piriformis|obturator|gemellus|quadratus|diaphragm|levator|platysma|buccinator|orbicularis|zygomaticus|mentalis|digastric|omohyoid|sternohyoid|thyrohyoid|splenius|longissimus|iliocostalis|multifidus|erector|obliquus|scalenus|spinalis|rotator|intertransvers|interspinal|longus (capitis|colli)|subclavius|sternothyroid|transversus thoracis|palmaris|anconeus|coccygeus|puborectalis|genioglossus|hyoglossus|constrictor|stylopharyngeus|palatopharyngeus|salpingopharyngeus|tensor veli|vocalis|arytenoid|cricothyroid|aryepiglotticus/i],
+  ['lymphatic', /spleen|thymus|lymph|tonsil/i],
+  ['digestive', /esophag|stomach|duoden|jejun|ileum|cecum|appendix|colon|rectum|anal canal|\bliver\b|hepatic duct|biliary|gallbladder|cystic duct|pancrea|mesentery|taenia|tooth|gingiva|salivary|submandibular gland|sublingual gland|parotid|pharyn|uvula/i],
+  ['urinary', /kidney|ureter|urinary bladder|urethra/i],
+  ['reproductive', /testis|epididym|deferent duct|seminal vesicle|prostate|penis|corpus cavernosum|corpus spongiosum|scrot/i],
+  ['connective', /fascia|ligament|raphe|tendinous ring|retinaculum/i],
+  ['skeleton', /bone|vertebra|\brib\b|sternum|skull|cranium|femur|tibia|fibula|humerus|\bradius|\bulna|scapula|clavicle|patella|phalanx|phalanges|metacarpal|metatarsal|carpal|tarsal|sacrum|coccyx|mandible|maxilla|hyoid|talus|calcaneus|cuneiform|cuboid|navicular|scaphoid|lunate|triquetr|pisiform|trapezium|trapezoid|capitate|hamate|ilium|ischium|pubis|cartilage|sphenoid|ethmoid|vomer|palatine|lacrimal|malleus|incus|stapes|\batlas\b|\baxis\b|pelvic girdle/i],
 ]
 const REGION_RULES: [string, RegExp][] = [
   ['brain', /brain|cerebr|cerebell|gyrus|thalam|medulla|\bpons\b|midbrain|hippocamp|amygdal|corpus callosum|caudate|putamen|globus|fornix|ventricle of brain|lateral ventricle|third ventricle|fourth ventricle/i],
