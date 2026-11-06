@@ -7,7 +7,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { layoutAtlas } from './lib'
 import { placeholderPieces } from './placeholder'
-import type { Entry, RegionId, Side, Vec3 } from './types'
+import type { Entry, OrganId, RegionId, Side, Vec3 } from './types'
+import { ORGANS } from './types'
 
 export interface Piece { e: Entry; geo: BufferGeometry }
 
@@ -73,4 +74,19 @@ export function buildSheet(region: RegionId, side: 'both' | Side) {
     sheet.pos.set(p.e.id, at)
     sheet.box.union(pieceBox(p, at))
   })
+}
+
+/** Current organ view: the pieces shown and their assembled bounding box. */
+export const focus = { ids: new Set<string>(), box: new Box3() }
+
+export const organMembers = (id: OrganId) => {
+  const o = ORGANS.find((x) => x.id === id)!
+  return world.pieces.filter((p) => (o.systems as readonly string[]).includes(p.e.system) && o.match.test(p.e.name))
+}
+
+export function buildFocus(id: OrganId) {
+  const m = organMembers(id)
+  focus.ids = new Set(m.map((p) => p.e.id))
+  focus.box = new Box3()
+  m.forEach((p) => focus.box.union(pieceBox(p, p.e.assembledPosition)))
 }

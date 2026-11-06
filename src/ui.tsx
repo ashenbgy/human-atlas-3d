@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { cam, viewBox } from './camera'
+import { cam } from './camera'
+import type { ViewId } from './camera'
 import { world } from './data'
-import { regionCount, useStore } from './store'
-import { REGIONS, SYSTEMS } from './types'
+import { DEFAULT_SYSTEMS, ORGAN_SYSTEMS, organMembers, regionCount, useStore } from './store'
+import { LAYERS, ORGANS, REGIONS, SYSTEMS } from './types'
 import type { Entry } from './types'
 
 const ICONS: Record<string, string> = {
@@ -54,13 +55,23 @@ export function SystemsPanel() {
   const on = SYSTEMS.filter((s) => systems[s.id])
   const visible = on.reduce((a, s) => a + counts[s.id], 0)
   const only = (ids: string[]) => on.length === ids.length && on.every((s) => ids.includes(s.id))
-  const active = on.length === SYSTEMS.length ? 'all' : only(['skeleton']) ? 'skeleton' : only(['heart', 'sensory', 'nervous', 'respiratory']) ? 'organs' : null
+  const isDefault = SYSTEMS.every((s) => systems[s.id] === DEFAULT_SYSTEMS[s.id])
+  const active = isDefault ? 'all' : only(['skeleton']) ? 'skeleton' : only(ORGAN_SYSTEMS) ? 'organs' : null
+  const [tab, setTab] = useState<'systems' | 'layers'>('systems')
+  const shown = SYSTEMS.filter((s) => counts[s.id] > 0) // placeholder mode has fewer systems
   return (
     <Panel className="systems" delay={0.1}>
-      <div className="ph"><b>Systems</b><span className="badge">{on.length}/{SYSTEMS.length}</span></div>
+      <div className="ph">
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'systems'} className={tab === 'systems' ? 'on' : ''} onClick={() => setTab('systems')}>Systems</button>
+          <button role="tab" aria-selected={tab === 'layers'} className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')}>Layers</button>
+        </div>
+        {tab === 'systems' && <span className="badge">{on.length}/{shown.length}</span>}
+      </div>
+      {tab === 'layers' ? <LayersTab /> : <>
       <Seg items={[['all', 'All'], ['skeleton', 'Skeleton'], ['organs', 'Organs']]} value={active} onChange={preset} />
       <div className="rows">
-        {SYSTEMS.map((s) => (
+        {shown.map((s) => (
           <div className="row" key={s.id}>
             <span className="dot" style={{ background: s.color }} />
             <span className="grow">{s.label}</span>
@@ -70,7 +81,46 @@ export function SystemsPanel() {
         ))}
       </div>
       <div className="pf"><span>{visible} pieces visible</span><button className="link" onClick={() => preset('none')}>Hide all</button></div>
+      </>}
     </Panel>
+  )
+}
+
+function LayersTab() {
+  const layers = useStore((s) => s.layers)
+  const systems = useStore((s) => s.systems)
+  const { setLayer, peelBack, restoreLayers } = useStore.getState()
+  const present = LAYERS.filter((l) => world.pieces.some((p) => (l.systems as readonly string[]).includes(p.e.system)))
+  return (
+    <>
+      <p className="sub tight">Peel away a layer to see what lies beneath.</p>
+      {present.map((l) => {
+        const pct = l.systems.some((x) => systems[x]) ? Math.round(layers[l.id] * 100) : 0 // systems off reads as 0%
+        return (
+          <label className="layer" key={l.id}>
+            <span className="lh"><span>{l.label}</span><em>{pct}%</em></span>
+            <input type="range" min={0} max={100} value={pct} style={{ ['--p' as string]: pct + '%' }} aria-label={`${l.label} layer opacity`}
+              onChange={(e) => setLayer(l.id, +e.target.value / 100)} />
+          </label>
+        )
+      })}
+      <div className="pf"><button className="peel" onClick={peelBack}>Peel back</button><button className="link" onClick={restoreLayers}>Restore layers</button></div>
+    </>
+  )
+}
+
+export function Organs() {
+  const organ = useStore((s) => s.organ)
+  const counts = useMemo(() => ORGANS.map((o) => organMembers(o.id).length), [])
+  return (
+    <motion.nav className="organs" aria-label="Organs in 3D" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}>
+      <span className="eyebrow">ORGANS</span>
+      {ORGANS.map((o, i) => counts[i] > 0 && (
+        <button key={o.id} className={organ === o.id ? 'on' : ''} aria-pressed={organ === o.id} onClick={() => useStore.getState().setOrgan(o.id)}>
+          <span className="dot" style={{ background: SYSTEMS.find((s) => s.id === o.systems[0])!.color }} />{o.label}
+        </button>
+      ))}
+    </motion.nav>
   )
 }
 
@@ -143,7 +193,7 @@ export function Search() {
 export function Toolbar() {
   const tool = useStore((s) => s.tool)
   const set = (tool: 'orbit' | 'pan') => useStore.setState({ tool })
-  const front = () => cam.fitBox(viewBox(), 1.1, true)
+  const front = () => useStore.getState().setView('front')
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if ((e.key === 'f' || e.key === 'F') && !(e.target instanceof HTMLInputElement)) front()
@@ -172,11 +222,21 @@ export function Toolbar() {
 export function ExplodeControl() {
   const explode = useStore((s) => s.explode)
   const region = useStore((s) => s.region)
+  const organ = useStore((s) => s.organ)
+  const view = useStore((s) => s.view)
   const pct = Math.round(explode * 100)
-  const reset = () => { useStore.getState().setRegion(null); useStore.getState().setExplode(0); useStore.getState().clear() }
+  const reset = () => { const s = useStore.getState(); s.setRegion(null); s.setExplode(0); s.clear(); s.restoreLayers(); s.setView('front') }
+  const mode = organ ? 'ORGAN · ' + ORGANS.find((o) => o.id === organ)!.label.toUpperCase()
+    : region ? 'SPECIMEN SHEET · ' + region.toUpperCase() : explode > 0 ? 'SPECIMEN ATLAS' : 'ANATOMICAL POSITION'
+  const views: [ViewId, string][] = [['front', 'FRONT'], ['back', 'BACK'], ['side', 'SIDE'], ['quarter', '¾']]
   return (
     <div className="explode-wrap">
-      <div className="caption">{region ? 'SPECIMEN SHEET · ' + region.toUpperCase() : explode > 0 ? 'SPECIMEN ATLAS' : 'ANATOMICAL POSITION · FRONT'}</div>
+      <div className="caption">
+        <span>{mode}</span>
+        {views.map(([v, l]) => (
+          <button key={v} className={view === v ? 'on' : ''} aria-pressed={view === v} onClick={() => useStore.getState().setView(v)}>{l}</button>
+        ))}
+      </div>
       <Panel className="explode" delay={0.3}>
         <div className="ex-main">
           <div className="ex-head"><Icon n="explode" /><b>Explode anatomy</b><span className="pct">{pct}%</span></div>

@@ -80,3 +80,29 @@ dl { margin:0 0 12px } dl div { display:flex; justify-content:space-between; pad
   .hint, .credits-link { display:none } .toolbar { right:8px; top:90px; transform:none }
   .explode-wrap { bottom:66px } .info { right:12px; left:12px; width:auto; top:auto; bottom:12px; max-height:46% }
 }
+
+/* systems / layers tabs */
+.tabs { display:flex; gap:12px } .tabs button { font-weight:600; font-size:12px; color:var(--mut); padding:2px 0; border-bottom:1.5px solid transparent; transition:color .15s,border-color .15s }
+.tabs button.on { color:var(--ink); border-color:var(--ink) }
+.row { height:25px }
+.sub.tight { margin:2px 0 8px }
+.layer { display:block; padding:5px 0 } .lh { display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:3px } .lh em { font-style:normal; color:var(--mut); font-size:10.5px; font-variant-numeric:tabular-nums }
+.peel { background:var(--ink); color:#fff; border-radius:7px; padding:5px 10px; font-size:11px; transition:opacity .15s } .peel:hover { opacity:.88 }
+.pf { align-items:center }
+
+/* organ strip */
+.organs { position:fixed; top:24px; left:50%; transform:translateX(-50%); max-width:calc(100vw - 600px); display:flex; align-items:center; gap:6px; overflow-x:auto; scrollbar-width:none; padding:5px; background:var(--panel); border:1px solid rgba(0,0,0,.05); border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.04) }
+.organs .eyebrow { padding:0 6px 0 4px }
+.organs button { display:flex; align-items:center; gap:6px; white-space:nowrap; padding:5px 9px; border-radius:8px; font-size:11px; transition:background .15s,color .15s }
+.organs button:hover { background:#F0F0EE } .organs button.on { background:var(--ink); color:#fff }
+
+/* view presets in the caption */
+.caption { display:flex; justify-content:center; align-items:center; gap:4px }
+.caption span { margin-right:6px } .caption button { font-size:9px; letter-spacing:.14em; color:var(--mut); padding:2px 6px; border-radius:5px; transition:background .15s,color .15s }
+.caption button:hover { color:var(--ink) } .caption button.on { background:var(--ink); color:#fff }
+.stage:focus-visible { outline:2px solid var(--ink); outline-offset:-4px }
+
+@media (max-width: 760px) {
+  .organs { top:84px; left:16px; right:16px; transform:none; max-width:none }
+  .left { top:136px; max-height:calc(100% - 340px) }
+}
