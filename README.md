@@ -2,8 +2,8 @@
 
 **Live demo: _TODO — add your Vercel link after deploying_**
 
-An interactive 3D anatomy explorer that feels like a digital museum. Rotate the body, toggle 8 anatomical systems,
-search any of 1,868 real structures, and drag one slider to pull the whole body apart into a catalogued specimen atlas.
+An interactive 3D anatomy explorer that feels like a digital museum. Rotate the body, toggle 15 anatomical systems,
+search any of 2,206 real structures, and drag one slider to pull the whole body apart into a catalogued specimen atlas.
 
 ![Explode slider: the assembled body separates into a specimen atlas and back](docs/explode.gif)
 
@@ -20,13 +20,17 @@ The processed anatomy (`public/anatomy`) is committed, so that is all you need.
 
 ## Features
 
-- 1,868 labelled meshes from the open BodyParts3D dataset, grouped into 8 systems: skeleton, muscles, heart, sensory organs,
-  arteries, veins, nervous system, respiratory
+- 2,206 labelled meshes from the open BodyParts3D dataset, grouped into 15 systems, from skeleton, muscles and vessels
+  to digestive, urinary, endocrine and skin
+- **Organs in 3D**: one click shows a single organ (heart, brain, lungs, liver, stomach, pancreas, intestines, kidneys, eye) on its own
+- **Layers**: peel the body back from skin to muscles, vessels, organs and skeleton, or set each layer's opacity
 - **Explode slider**: every piece eases from its anatomical position into a specimen sheet (larger pieces on top, smaller ones denser below), and stays clickable
 - Hover tooltips, a teal highlight that shows through surrounding tissue, an info panel, and isolate mode
 - Search that flies the camera to any structure (`/` to focus)
 - Region collections (hand, shoulder, thigh, foot, heart, brain) laid out as specimen sheets, filterable by side
-- Keyboard: `F` front view · `I` isolate · `Esc` clear
+- Front, back, side and ¾ view presets, plus an anatomical compass (superior/inferior, left/right, anterior/posterior) you can click
+- Keyboard: arrow keys orbit · `Shift` + arrows pan · `+`/`−` zoom · `Home` reset · `Enter` select the structure at the centre ·
+  `F` front view · `I` isolate · `Esc` back out
 
 Stack: React, TypeScript, Vite, three.js via react-three-fiber and drei, Framer Motion, zustand, N8AO ambient occlusion.
 
@@ -56,7 +60,7 @@ The script:
 - lays out the atlas;
 - writes one meshopt-compressed GLB per system.
 
-The 366 files it can't classify (mostly organs outside the 8 systems, such as liver or skin) are logged to
+The 28 files it can't classify (vague groupings such as "portion of tissue" or "body of organ") are logged to
 `scripts/unclassified.log` rather than guessed.
 
 ## Known gaps
