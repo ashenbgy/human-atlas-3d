@@ -7,8 +7,8 @@ import type { LayerId, OrganId, RegionId, Side, SystemId } from './types'
 
 type Systems = Record<SystemId, boolean>
 const all = (on: boolean) => Object.fromEntries(SYSTEMS.map((s) => [s.id, on])) as Systems
-/** Everything except skin, which would hide all the rest. */
-export const DEFAULT_SYSTEMS: Systems = { ...all(true), skin: false }
+/** Everything except skin (it would hide all the rest) and the reproductive organs (one click away in Systems). */
+export const DEFAULT_SYSTEMS: Systems = { ...all(true), skin: false, reproductive: false }
 export const ORGAN_SYSTEMS: SystemId[] = ['heart', 'sensory', 'nervous', 'respiratory', 'digestive', 'urinary', 'endocrine', 'reproductive', 'lymphatic']
 const fullLayers = () => Object.fromEntries(LAYERS.map((l) => [l.id, 1])) as Record<LayerId, number>
 

@@ -24,6 +24,7 @@ The processed anatomy (`public/anatomy`) is committed, so that is all you need.
   to digestive, urinary, endocrine and skin
 - **Organs in 3D**: one click shows a single organ (heart, brain, lungs, liver, stomach, pancreas, intestines, kidneys, eye) on its own
 - **Layers**: peel the body back from skin to muscles, vessels, organs and skeleton, or set each layer's opacity
+- **Skin** with hair, dressed in simple shorts cut from the skin surface. The reproductive system is off by default and one click away in Systems
 - **Explode slider**: every piece eases from its anatomical position into a specimen sheet (larger pieces on top, smaller ones denser below), and stays clickable
 - Hover tooltips, a teal highlight that shows through surrounding tissue, an info panel, and isolate mode
 - Search that flies the camera to any structure (`/` to focus)
