@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { ContactShadows, Environment, GizmoHelper, Lightformer, OrbitControls } from '@react-three/drei'
 import { EffectComposer, N8AO } from '@react-three/postprocessing'
-import { Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, MOUSE, TOUCH, Mesh, MeshPhysicalMaterial, PerspectiveCamera, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
+import { Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, MOUSE, TOUCH, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { cam, currentBox, viewBox } from './camera'
 import { focus, sheet, world } from './data'
@@ -14,9 +14,14 @@ import type { Vec3 } from './types'
 
 const FRONT = new Vector3(0, 0.05, 1).normalize()
 
+/** Anything animating (camera, explode, fades) pushes this forward; ambient occlusion only runs once it has passed. */
+const activity = { until: 0 }
+const markBusy = (ms = 250) => { activity.until = Math.max(activity.until, performance.now() + ms) }
+
 function CameraRig() {
   const camera = useThree((s) => s.camera) as PerspectiveCamera
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null
+  const setEvents = useThree((s) => s.setEvents)
   const tw = useRef<{ t0: number; dur: number; p0: Vector3; p1: Vector3; c0: Vector3; c1: Vector3 } | null>(null)
 
   useEffect(() => {
@@ -54,7 +59,13 @@ function CameraRig() {
       const delta = right.multiplyScalar(dx * dist * 0.08).add(up.multiplyScalar(dy * dist * 0.08))
       go(camera.position.clone().add(delta), controls.target.clone().add(delta), 250)
     }
-    controls.addEventListener('start', leavePreset)
+    // hover hit-testing 2,000+ meshes on every mouse move is wasted work while dragging the camera
+    const dragStart = () => { leavePreset(); setEvents({ enabled: false }); if (useStore.getState().hoverId) useStore.setState({ hoverId: null }) }
+    const dragEnd = () => setEvents({ enabled: true })
+    controls.addEventListener('start', dragStart)
+    controls.addEventListener('end', dragEnd)
+    const onChange = () => markBusy() // fires while dragging and while damping settles
+    controls.addEventListener('change', onChange)
     // initial framing, no animation
     const b = viewBox()
     cam.fitBox(b, 1.1, true)
@@ -63,12 +74,13 @@ function CameraRig() {
     controls.target.copy(t.c1)
     tw.current = null
     controls.update()
-    return () => controls.removeEventListener('start', leavePreset)
-  }, [camera, controls])
+    return () => { controls.removeEventListener('start', dragStart); controls.removeEventListener('end', dragEnd); controls.removeEventListener('change', onChange) }
+  }, [camera, controls, setEvents])
 
   useFrame(() => {
     const t = tw.current
     if (!t || !controls) return
+    markBusy()
     const k = Math.min(1, (performance.now() - t.t0) / t.dur)
     const e = easeInOutCubic(k)
     camera.position.lerpVectors(t.p0, t.p1, e)
@@ -107,9 +119,9 @@ function Specimens() {
       const sys = p.e.system
       const c = new Color(tissue(p.e.name, sys, SYSTEMS.find((x) => x.id === sys)!.color, p.e.region))
       c.offsetHSL((Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.07) // per-piece variation
-      return new MeshPhysicalMaterial({
-        color: c, roughness: sys === 'skeleton' ? 0.75 : 0.45, metalness: 0,
-        clearcoat: sys === 'skeleton' ? 0 : 0.2, clearcoatRoughness: 0.5, sheen: 0.5, sheenRoughness: 0.6, sheenColor: new Color('#ffd9cf'), // soft moist tissue, matte bone
+      // standard (not physical) material: sheen + clearcoat on 2,000+ meshes was the main GPU cost
+      return new MeshStandardMaterial({
+        color: c, roughness: sys === 'skeleton' ? 0.75 : 0.42, metalness: 0, // lower roughness keeps a soft tissue sheen from the environment
         transparent: true, opacity: 0, emissive: HILITE, emissiveIntensity: 0,
         side: sys === 'skin' ? DoubleSide : FrontSide, // the skin surface is inside-out in BodyParts3D
       })
@@ -119,6 +131,9 @@ function Specimens() {
   const sysIdx = useMemo(() => pieces.map((p) => SYSTEMS.findIndex((s) => s.id === p.e.system)), [pieces])
   const layerOf = useMemo(() => pieces.map((p) => LAYERS.find((l) => (l.systems as readonly string[]).includes(p.e.system))!.id), [pieces])
   const group = useRef<Group>(null)
+  const skinIdx = useMemo(() => pieces.findIndex((p) => p.e.system === 'skin' && /integumentary/i.test(p.e.name)), [pieces])
+  const garment = useRef<Mesh>(null)
+  const garmentMat = useMemo(() => new MeshStandardMaterial({ color: '#2E3B44', roughness: 0.9, side: DoubleSide, transparent: true, opacity: 0 }), [])
   const camera = useThree((s) => s.camera)
   useEffect(() => {
     const ray = new Raycaster()
@@ -142,6 +157,9 @@ function Specimens() {
     st.rt += clamp((s.region ? 1 : 0) - st.rt, -dt / 1.2, dt / 1.2)
     const e = easeInOutCubic(st.ex), r = easeInOutCubic(st.rt)
     const moving = e !== st.lastE || r !== st.lastR
+    let fading = false
+    // opaque skin hides everything under it; drawing those layers anyway only lets coarse muscles poke through
+    const skinCover = s.systems.skin && s.layers.skin > 0.97 && !s.organ && !s.region && s.explode === 0 && st.ex < 0.01
     st.lastE = e
     st.lastR = r
     for (let i = 0; i < n; i++) {
@@ -156,23 +174,39 @@ function Specimens() {
         m.position.set(px, py, pz)
       }
       let target = s.systems[p.system] ? 1 : 0
-      const layer = s.organ ? 1 : s.layers[layerOf[i]]
+      const layer = s.organ ? 1 : skinCover && layerOf[i] !== 'skin' && p.id !== s.selectedId ? 0 : s.layers[layerOf[i]]
       if (s.organ) target = focus.ids.has(p.id) ? 1 : 0
       else target *= layer
       if (target && s.region && !sheet.pos.has(p.id)) target = 0
       if (target && s.selectedId) target = p.id === s.selectedId ? 1 : s.isolate ? 0 : 0.09
       st.op[i] += (target - st.op[i]) * Math.min(1, dt * (9 - 0.5 * sysIdx[i])) // per-system rate = slight stagger
+      if (Math.abs(target - st.op[i]) < 0.003) st.op[i] = target
+      else fading = true
       const o = st.op[i], mat = mats[i]
       m.visible = o > 0.01
       st.hit[i] = o > 0.05 && layer >= 0.5 ? 1 : 0 // peeled-back layers are click-through
-      if (mat.opacity !== o) { mat.opacity = o; mat.depthWrite = o > 0.9 }
+      if (mat.opacity !== o) {
+        mat.opacity = o
+        mat.depthWrite = o > 0.9
+        // only fading/dimmed pieces go through the slow transparent pass; switching swaps the cached shader variant
+        const tr = o < 1
+        if (mat.transparent !== tr) { mat.transparent = tr; mat.needsUpdate = true }
+      }
       const isSel = p.id === s.selectedId
       // selected piece draws on top of everything (visible even when buried in muscle)
       if (mat.depthTest === isSel) { mat.depthTest = !isSel; m.renderOrder = isSel ? 10 : 0 }
       const et = isSel ? 0.75 : p.id === s.hoverId ? 0.35 : 0
       st.em[i] += (et - st.em[i]) * Math.min(1, dt * 14)
       mat.emissiveIntensity = st.em[i]
+      if (i === skinIdx && garment.current) {
+        // shorts follow the skin, but stay opaque even when the skin is see-through
+        const g = garment.current, go = Math.min(1, o * 4)
+        g.position.copy(m.position)
+        g.visible = go > 0.01
+        if (garmentMat.opacity !== go) { garmentMat.opacity = go; const tr = go < 1; if (garmentMat.transparent !== tr) { garmentMat.transparent = tr; garmentMat.needsUpdate = true } }
+      }
     }
+    if (moving || fading) markBusy()
   })
 
   // Raycasting: r3f casts the pointer ray through every mesh; take the first visible hit.
@@ -192,6 +226,7 @@ function Specimens() {
         <mesh key={p.e.id} ref={(m) => { meshes.current[i] = m }} geometry={p.geo} material={mats[i]}
           position={p.e.assembledPosition} userData={{ i }} visible={false} />
       ))}
+      {world.garment && <mesh ref={garment} geometry={world.garment} material={garmentMat} visible={false} />}
     </group>
   )
 }
@@ -240,7 +275,26 @@ function Compass() {
 function Ground() {
   const ref = useRef<any>(null)
   useFrame(() => { if (ref.current) { const s = useStore.getState(); ref.current.visible = s.explode < 0.02 && !s.region && !s.organ } })
-  return <ContactShadows ref={ref} position={[0, 0.001, 0]} opacity={0.18} scale={3} blur={3} far={1.2} />
+  return <ContactShadows ref={ref} frames={90} position={[0, 0.001, 0]} opacity={0.18} scale={3} blur={3} far={1.2} />
+}
+
+/**
+ * Ambient occlusion is the single most expensive pass (~25x the frame cost in testing), so it only runs
+ * when nothing is moving. While busy the scene is rendered directly instead.
+ */
+function PostFX() {
+  const [ao, setAo] = useState(true)
+  useFrame(() => {
+    const idle = performance.now() >= activity.until
+    if (idle !== ao) setAo(idle)
+  })
+  // the compass HUD (render priority 2) disables r3f's automatic render, so draw the scene ourselves when AO is off
+  useFrame(({ gl, scene, camera }) => { if (!ao) gl.render(scene, camera) }, 1)
+  return (
+    <EffectComposer multisampling={0} enabled={ao}>
+      <N8AO aoRadius={0.05} distanceFalloff={1} intensity={2.5} quality="medium" halfRes />
+    </EffectComposer>
+  )
 }
 
 export function Scene() {
@@ -259,9 +313,7 @@ export function Scene() {
       </Environment>
       <Specimens />
       <Ground />
-      <EffectComposer multisampling={0}>
-        <N8AO aoRadius={0.05} distanceFalloff={1} intensity={2.5} quality="medium" halfRes />
-      </EffectComposer>
+      <PostFX />
       <OrbitControls
         makeDefault enableDamping dampingFactor={0.05} screenSpacePanning minDistance={0.05} maxDistance={60}
         mouseButtons={{ LEFT: tool === 'pan' ? MOUSE.PAN : MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}

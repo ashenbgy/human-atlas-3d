@@ -43,7 +43,7 @@ export default function App() {
       <div className="stage" tabIndex={0} role="application"
         aria-label="Interactive anatomy. Drag to orbit and scroll to zoom. Arrow keys orbit, Shift + arrows pan, plus or minus zoom, Home resets, Enter selects the structure at the centre."
         onPointerDown={(e) => (down.current = [e.clientX, e.clientY])}>
-        <Canvas gl={{ alpha: true }} camera={{ fov: 30, near: 0.01, far: 200, position: [0, 1, 6] }} dpr={[1, 2]}
+        <Canvas gl={{ alpha: true }} camera={{ fov: 30, near: 0.01, far: 200, position: [0, 1, 6] }} dpr={[1, 1.5]}
           onPointerMissed={(e) => { if (Math.hypot(e.clientX - down.current[0], e.clientY - down.current[1]) < 5) useStore.getState().clear() }}>
           <Scene />
         </Canvas>
