@@ -2,7 +2,7 @@
  * Loader. If /anatomy/manifest.json exists (written by scripts/build-anatomy.ts) every piece is
  * read from its system GLB (node name == piece id). Otherwise falls back to placeholder primitives.
  */
-import { Box3, BufferAttribute, BufferGeometry, Mesh, Vector3 } from 'three'
+import { Box3, BufferAttribute, BufferGeometry, Mesh, Sphere, Vector3 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { layoutAtlas } from './lib'
@@ -91,6 +91,7 @@ function dressSkin(pieces: Piece[]) {
   shorts.setAttribute('normal', new BufferAttribute(N, 3))
   shorts.setIndex(tris)
   shorts.computeBoundingBox()
+  shorts.computeBoundingSphere()
   inflate(shorts, 0.007, axisFor(skin)) // 11 mm off the original skin in total
   // the flattened groin is folded underneath; give it one forward-facing normal so the fabric shades as a smooth panel
   const zone = (i: number) => { const x = P[i * 3] + S[0], y = P[i * 3 + 1] + S[1]; return y > 0.7 && y < 0.88 && Math.abs(x) < 0.08 }
@@ -101,6 +102,113 @@ function dressSkin(pieces: Piece[]) {
   world.garment = shorts
 }
 
+function processGeometry(o: Mesh): BufferGeometry {
+  const origGeo = o.geometry
+  const posAttr = origGeo.attributes.position
+  const count = posAttr.count
+  const indexAttr = origGeo.index
+  const e = o.matrixWorld.elements
+  const pos = new Float32Array(count * 3)
+  let minX = Infinity, minY = Infinity, minZ = Infinity
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+
+  const isInterleaved = !!(posAttr as any).isInterleavedBufferAttribute
+  const isNormalized = !!posAttr.normalized
+  // normalised integer positions (meshopt quantisation) map to [-1, 1] / [0, 1] by array type
+  const arr = posAttr.array
+  const scaleFactor = !isNormalized ? 1 : arr instanceof Int16Array ? 1 / 32767 : arr instanceof Uint16Array ? 1 / 65535 : arr instanceof Int8Array ? 1 / 127 : arr instanceof Uint8Array ? 1 / 255 : 1
+  const isDiag = (e[1] === 0 && e[2] === 0 && e[3] === 0 &&
+                  e[4] === 0 && e[6] === 0 && e[7] === 0 &&
+                  e[8] === 0 && e[9] === 0 && e[11] === 0 &&
+                  e[12] === 0 && e[13] === 0 && e[14] === 0 && e[15] === 1)
+  const m00 = e[0], m11 = e[5], m22 = e[10]
+
+  if (isInterleaved) {
+    const src = (posAttr as any).data.array as ArrayLike<number>
+    const stride = (posAttr as any).data.stride as number
+    const offset = (posAttr as any).offset as number
+    for (let i = 0, j = 0; i < count; i++, j += 3) {
+      const srcIdx = i * stride + offset
+      let x = src[srcIdx] * scaleFactor
+      let y = src[srcIdx + 1] * scaleFactor
+      let z = src[srcIdx + 2] * scaleFactor
+      if (isDiag) {
+        x *= m00; y *= m11; z *= m22
+      } else {
+        const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15])
+        const nx = (e[0] * x + e[4] * y + e[8] * z + e[12]) * w
+        const ny = (e[1] * x + e[5] * y + e[9] * z + e[13]) * w
+        const nz = (e[2] * x + e[6] * y + e[10] * z + e[14]) * w
+        x = nx; y = ny; z = nz
+      }
+      pos[j] = x; pos[j + 1] = y; pos[j + 2] = z
+      if (x < minX) minX = x; if (x > maxX) maxX = x
+      if (y < minY) minY = y; if (y > maxY) maxY = y
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
+    }
+  } else {
+    const src = posAttr.array
+    for (let i = 0, j = 0; i < count; i++, j += 3) {
+      let x = src[j] * scaleFactor
+      let y = src[j + 1] * scaleFactor
+      let z = src[j + 2] * scaleFactor
+      if (isDiag) {
+        x *= m00; y *= m11; z *= m22
+      } else {
+        const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15])
+        const nx = (e[0] * x + e[4] * y + e[8] * z + e[12]) * w
+        const ny = (e[1] * x + e[5] * y + e[9] * z + e[13]) * w
+        const nz = (e[2] * x + e[6] * y + e[10] * z + e[14]) * w
+        x = nx; y = ny; z = nz
+      }
+      pos[j] = x; pos[j + 1] = y; pos[j + 2] = z
+      if (x < minX) minX = x; if (x > maxX) maxX = x
+      if (y < minY) minY = y; if (y > maxY) maxY = y
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
+    }
+  }
+
+  const g = new BufferGeometry()
+  g.setAttribute('position', new BufferAttribute(pos, 3))
+  if (indexAttr) g.setIndex(indexAttr)
+  g.boundingBox = new Box3(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ))
+
+  const cx = (minX + maxX) * 0.5, cy = (minY + maxY) * 0.5, cz = (minZ + maxZ) * 0.5
+  let maxRadiusSq = 0
+  for (let j = 0; j < pos.length; j += 3) {
+    const dx = pos[j] - cx, dy = pos[j + 1] - cy, dz = pos[j + 2] - cz
+    const rSq = dx * dx + dy * dy + dz * dz
+    if (rSq > maxRadiusSq) maxRadiusSq = rSq
+  }
+  g.boundingSphere = new Sphere(new Vector3(cx, cy, cz), Math.sqrt(maxRadiusSq))
+
+  const norm = new Float32Array(count * 3)
+  const idx = indexAttr ? indexAttr.array : null
+  if (idx) {
+    for (let i = 0; i < idx.length; i += 3) {
+      const ia = idx[i] * 3, ib = idx[i + 1] * 3, ic = idx[i + 2] * 3
+      const ax = pos[ia], ay = pos[ia + 1], az = pos[ia + 2]
+      const bx = pos[ib], by = pos[ib + 1], bz = pos[ib + 2]
+      const cx_ = pos[ic], cy_ = pos[ic + 1], cz_ = pos[ic + 2]
+      const cbx = cx_ - bx, cby = cy_ - by, cbz = cz_ - bz
+      const abx = ax - bx, aby = ay - by, abz = az - bz
+      const nx = cby * abz - cbz * aby
+      const ny = cbz * abx - cbx * abz
+      const nz = cbx * aby - cby * abx
+      norm[ia] += nx; norm[ia + 1] += ny; norm[ia + 2] += nz
+      norm[ib] += nx; norm[ib + 1] += ny; norm[ib + 2] += nz
+      norm[ic] += nx; norm[ic + 1] += ny; norm[ic + 2] += nz
+    }
+  }
+  for (let j = 0; j < norm.length; j += 3) {
+    const x = norm[j], y = norm[j + 1], z = norm[j + 2]
+    const len = Math.hypot(x, y, z) || 1
+    norm[j] = x / len; norm[j + 1] = y / len; norm[j + 2] = z / len
+  }
+  g.setAttribute('normal', new BufferAttribute(norm, 3))
+  return g
+}
+
 export async function loadWorld() {
   let pieces: Piece[] = []
   try {
@@ -108,17 +216,17 @@ export async function loadWorld() {
     const manifest = (await res.json()) as { pieces: Entry[] }
     const geos = new Map<string, BufferGeometry>()
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
-    for (const file of new Set(manifest.pieces.map((p) => p.meshFile))) {
-      const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}anatomy/${file}`)
-      gltf.scene.updateMatrixWorld(true)
-      gltf.scene.traverse((o) => {
-        if (!(o as Mesh).isMesh) return
-        const g = (o as Mesh).geometry.clone().applyMatrix4(o.matrixWorld) // bakes meshopt quantisation transform
-        if (!g.getAttribute('normal')) g.computeVertexNormals()
-        g.computeBoundingBox()
-        geos.set(o.name, g)
-      })
-    }
+    const files = Array.from(new Set(manifest.pieces.map((p) => p.meshFile)))
+    await Promise.all(
+      files.map(async (file) => {
+        const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}anatomy/${file}`)
+        gltf.scene.updateMatrixWorld(true)
+        gltf.scene.traverse((o) => {
+          if (!(o as Mesh).isMesh) return
+          geos.set(o.name, processGeometry(o as Mesh))
+        })
+      }),
+    )
     pieces = manifest.pieces.filter((e) => geos.has(e.id)).map((e) => ({ e, geo: geos.get(e.id)! }))
     dressSkin(pieces)
     pieces = pieces.filter((p) => !/hair of trunk/i.test(p.e.name)) // pubic hair; covered by the shorts

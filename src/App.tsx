@@ -17,7 +17,7 @@ export default function App() {
     const k = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
       const s = useStore.getState()
-      if (e.key === 'Escape') s.creditsOpen ? useStore.setState({ creditsOpen: false }) : s.selectedId ? s.clear() : s.organ ? s.setOrgan(null) : s.region && s.setRegion(null)
+      if (e.key === 'Escape') s.selectedId ? s.clear() : s.organ ? s.setOrgan(null) : s.region && s.setRegion(null)
       if ((e.key === 'i' || e.key === 'I') && s.selectedId) useStore.setState({ isolate: !s.isolate })
       // model navigation only when focus is on the page or the 3D view, so sliders and buttons keep their own keys
       const t = e.target as HTMLElement
@@ -43,7 +43,7 @@ export default function App() {
       <div className="stage" tabIndex={0} role="application"
         aria-label="Interactive anatomy. Drag to orbit and scroll to zoom. Arrow keys orbit, Shift + arrows pan, plus or minus zoom, Home resets, Enter selects the structure at the centre."
         onPointerDown={(e) => (down.current = [e.clientX, e.clientY])}>
-        <Canvas gl={{ alpha: true }} camera={{ fov: 30, near: 0.01, far: 200, position: [0, 1, 6] }} dpr={[1, 1.5]}
+        <Canvas gl={{ alpha: true, powerPreference: 'high-performance' }} camera={{ fov: 30, near: 0.01, far: 200, position: [0, 1, 6] }} dpr={[1, 1.5]}
           onPointerMissed={(e) => { if (Math.hypot(e.clientX - down.current[0], e.clientY - down.current[1]) < 5) useStore.getState().clear() }}>
           <Scene />
         </Canvas>

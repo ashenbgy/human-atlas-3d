@@ -21,7 +21,6 @@ interface State {
   region: RegionId | null
   side: 'both' | Side
   tool: 'orbit' | 'pan'
-  creditsOpen: boolean
   layers: Record<LayerId, number> // 0..1 opacity per depth layer
   organ: OrganId | null
   view: ViewId | null // null once the user orbits away from a preset
@@ -41,7 +40,7 @@ interface State {
 
 export const useStore = create<State>()((set, get) => ({
   systems: DEFAULT_SYSTEMS, selectedId: null, isolate: false, hoverId: null, explode: 0,
-  region: null, side: 'both', tool: 'orbit', creditsOpen: false,
+  region: null, side: 'both', tool: 'orbit',
   layers: fullLayers(), organ: null, view: 'front',
   setLayer: (id, v) =>
     set((s) => {

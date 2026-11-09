@@ -125,7 +125,8 @@ export function Organs() {
 }
 
 export function Collections() {
-  const { region, side } = useStore()
+  const region = useStore((s) => s.region)
+  const side = useStore((s) => s.side)
   const { setRegion, setSide } = useStore.getState()
   const [open, setOpen] = useState(() => window.innerWidth > 760)
   return (
@@ -275,7 +276,8 @@ export function Tooltip() {
 }
 
 export function InfoPanel() {
-  const { selectedId, isolate } = useStore()
+  const selectedId = useStore((s) => s.selectedId)
+  const isolate = useStore((s) => s.isolate)
   const p = selectedId ? world.byId.get(selectedId) : null
   const near = useMemo(() => {
     if (!p) return []
@@ -312,26 +314,11 @@ export function InfoPanel() {
 }
 
 export function Credits() {
-  const open = useStore((s) => s.creditsOpen)
   const sel = useStore((s) => !!s.selectedId)
-  const set = (creditsOpen: boolean) => useStore.setState({ creditsOpen })
   return (
     <>
       <div className="hint">{sel ? 'Esc to clear · I to isolate · F for front view' : 'Drag to orbit · Scroll to zoom · Tap to inspect'}</div>
-      <button className="link credits-link" onClick={() => set(true)}>Sources &amp; credits</button>
-      <AnimatePresence>
-        {open && (
-          <motion.div className="modal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => set(false)}>
-            <div className="panel card" onClick={(e) => e.stopPropagation()}>
-              <h2>Sources &amp; credits</h2>
-              <p>BodyParts3D, © The Database Center for Life Science licensed under CC Attribution 4.0 International</p>
-              <p><a href="https://dbarchive.biosciencedbc.jp/en/bodyparts3d/lic.html" target="_blank" rel="noreferrer">BodyParts3D license page</a></p>
-              {world.placeholder && <p className="warn">This build is showing placeholder primitives, not BodyParts3D anatomy. See the README to build the real assets.</p>}
-              <button className="primary" onClick={() => set(false)}>Close</button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div className="built-by">Built by alphash</div>
     </>
   )
 }

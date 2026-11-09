@@ -26,7 +26,7 @@ The processed anatomy (`public/anatomy`) is committed, so that is all you need.
 - **Layers**: peel the body back from skin to muscles, vessels, organs and skeleton, or set each layer's opacity
 - **Skin** with hair, dressed in simple shorts cut from the skin surface. The reproductive system is off by default and one click away in Systems
 - **Explode slider**: every piece eases from its anatomical position into a specimen sheet (larger pieces on top, smaller ones denser below), and stays clickable
-- Hover tooltips, a teal highlight that shows through surrounding tissue, an info panel, and isolate mode
+- Hover tooltips, the selected structure in its true colours while everything else fades to a ghost, an info panel, and isolate mode
 - Search that flies the camera to any structure (`/` to focus)
 - Region collections (hand, shoulder, thigh, foot, heart, brain) laid out as specimen sheets, filterable by side
 - Front, back, side and ¾ view presets, plus an anatomical compass (superior/inferior, left/right, anterior/posterior) you can click

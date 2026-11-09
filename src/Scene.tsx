@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { ContactShadows, Environment, GizmoHelper, Lightformer, OrbitControls } from '@react-three/drei'
 import { EffectComposer, N8AO } from '@react-three/postprocessing'
-import { Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, MOUSE, TOUCH, Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
+import { Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, Matrix4, MOUSE, TOUCH, Mesh, MeshStandardMaterial, PerspectiveCamera, Ray, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { cam, currentBox, viewBox } from './camera'
 import { focus, sheet, world } from './data'
@@ -114,22 +114,30 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v))
 function Specimens() {
   const pieces = world.pieces
   const n = pieces.length
+  const sysIdx = useMemo(() => pieces.map((p) => SYSTEMS.findIndex((s) => s.id === p.e.system)), [pieces])
+  const layerOf = useMemo(() => pieces.map((p) => LAYERS.find((l) => (l.systems as readonly string[]).includes(p.e.system))!.id), [pieces])
+  const initOps = useMemo(() => {
+    const s = useStore.getState()
+    return pieces.map((p, i) => {
+      if (!s.systems[p.e.system]) return 0
+      return s.layers[layerOf[i]] ?? 1
+    })
+  }, [pieces, layerOf])
   const mats = useMemo(
-    () => pieces.map((p) => {
+    () => pieces.map((p, i) => {
       const sys = p.e.system
       const c = new Color(tissue(p.e.name, sys, SYSTEMS.find((x) => x.id === sys)!.color, p.e.region))
       c.offsetHSL((Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.07) // per-piece variation
-      // standard (not physical) material: sheen + clearcoat on 2,000+ meshes was the main GPU cost
+      const op = initOps[i]
+      const tr = op < 1
       return new MeshStandardMaterial({
-        color: c, roughness: sys === 'skeleton' ? 0.75 : 0.42, metalness: 0, // lower roughness keeps a soft tissue sheen from the environment
-        transparent: true, opacity: 0, emissive: HILITE, emissiveIntensity: 0,
+        color: c, roughness: sys === 'skeleton' ? 0.75 : 0.42, metalness: 0,
+        transparent: tr, opacity: op, depthWrite: !tr, emissive: HILITE, emissiveIntensity: 0,
         side: sys === 'skin' ? DoubleSide : FrontSide, // the skin surface is inside-out in BodyParts3D
       })
     }),
-    [pieces],
+    [pieces, initOps],
   )
-  const sysIdx = useMemo(() => pieces.map((p) => SYSTEMS.findIndex((s) => s.id === p.e.system)), [pieces])
-  const layerOf = useMemo(() => pieces.map((p) => LAYERS.find((l) => (l.systems as readonly string[]).includes(p.e.system))!.id), [pieces])
   const group = useRef<Group>(null)
   const skinIdx = useMemo(() => pieces.findIndex((p) => p.e.system === 'skin' && /integumentary/i.test(p.e.name)), [pieces])
   const garment = useRef<Mesh>(null)
@@ -146,8 +154,27 @@ function Specimens() {
   })
   const meshes = useRef<(Mesh | null)[]>([])
   const st = useMemo(() => ({
-    op: new Float32Array(n), em: new Float32Array(n), hit: new Uint8Array(n), ex: 0, rt: 0, lastE: -1, lastR: -1,
-  }), [n])
+    op: Float32Array.from(initOps), em: new Float32Array(n), hit: Uint8Array.from(initOps, (o) => (o > 0.05 ? 1 : 0)), ex: 0, rt: 0, lastE: 0, lastR: 0,
+  }), [n, initOps])
+
+  const invMat = useMemo(() => new Matrix4(), [])
+  const localRay = useMemo(() => new Ray(), [])
+  useEffect(() => {
+    meshes.current.forEach((m) => {
+      if (!m) return
+      m.raycast = function (raycaster, intersects) {
+        const i = this.userData.i
+        if (!st.hit[i]) return
+        const bb = this.geometry.boundingBox
+        if (bb) {
+          invMat.copy(this.matrixWorld).invert()
+          localRay.copy(raycaster.ray).applyMatrix4(invMat)
+          if (!localRay.intersectsBox(bb)) return
+        }
+        Mesh.prototype.raycast.call(this, raycaster, intersects)
+      }
+    })
+  }, [pieces, st, invMat, localRay])
 
   // All animation lives here: no React state per frame.
   useFrame((_, dt0) => {
@@ -179,31 +206,43 @@ function Specimens() {
       else target *= layer
       if (target && s.region && !sheet.pos.has(p.id)) target = 0
       if (target && s.selectedId) target = p.id === s.selectedId ? 1 : s.isolate ? 0 : 0.09
+      if (p.id === s.selectedId && s.systems[p.system]) target = 1 // the selected piece is always fully solid, whatever its layer slider says
       st.op[i] += (target - st.op[i]) * Math.min(1, dt * (9 - 0.5 * sysIdx[i])) // per-system rate = slight stagger
       if (Math.abs(target - st.op[i]) < 0.003) st.op[i] = target
       else fading = true
       const o = st.op[i], mat = mats[i]
       m.visible = o > 0.01
       st.hit[i] = o > 0.05 && layer >= 0.5 ? 1 : 0 // peeled-back layers are click-through
-      if (mat.opacity !== o) {
+      const isSel = p.id === s.selectedId
+      // The selected piece joins the transparent pass (fully opaque, drawn last, ignoring depth) so the faded
+      // pieces in front of it cannot paint over it; every other piece is transparent only while fading.
+      const tr = o < 1 || isSel
+      if (mat.opacity !== o || mat.transparent !== tr) {
         mat.opacity = o
-        mat.depthWrite = o > 0.9
-        // only fading/dimmed pieces go through the slow transparent pass; switching swaps the cached shader variant
-        const tr = o < 1
+        mat.depthWrite = !tr
+        // three compiles opaque materials with an OPAQUE shader flag that forces alpha to 1, so a material
+        // changing between opaque and transparent must be rebuilt (only on a state change, never per frame)
         if (mat.transparent !== tr) { mat.transparent = tr; mat.needsUpdate = true }
       }
-      const isSel = p.id === s.selectedId
-      // selected piece draws on top of everything (visible even when buried in muscle)
       if (mat.depthTest === isSel) { mat.depthTest = !isSel; m.renderOrder = isSel ? 10 : 0 }
-      const et = isSel ? 0.75 : p.id === s.hoverId ? 0.35 : 0
-      st.em[i] += (et - st.em[i]) * Math.min(1, dt * 14)
-      mat.emissiveIntensity = st.em[i]
+      const et = !isSel && p.id === s.hoverId ? 0.35 : 0 // selected keeps its true colour; only hover glows
+      if (st.em[i] !== 0 || et !== 0) {
+        st.em[i] += (et - st.em[i]) * Math.min(1, dt * 14)
+        if (Math.abs(st.em[i] - et) < 0.002) st.em[i] = et
+        mat.emissiveIntensity = st.em[i]
+        fading = true
+      }
       if (i === skinIdx && garment.current) {
         // shorts follow the skin, but stay opaque even when the skin is see-through
         const g = garment.current, go = Math.min(1, o * 4)
         g.position.copy(m.position)
         g.visible = go > 0.01
-        if (garmentMat.opacity !== go) { garmentMat.opacity = go; const tr = go < 1; if (garmentMat.transparent !== tr) { garmentMat.transparent = tr; garmentMat.needsUpdate = true } }
+        if (garmentMat.opacity !== go) {
+          garmentMat.opacity = go
+          const tr = go < 1
+          garmentMat.depthWrite = !tr
+          if (garmentMat.transparent !== tr) { garmentMat.transparent = tr; garmentMat.needsUpdate = true }
+        }
       }
     }
     if (moving || fading) markBusy()
@@ -215,18 +254,25 @@ function Specimens() {
     return h ? pieces[h.object.userData.i].e.id : null
   }
   const { getState: get } = useStore
+  const lastMove = useRef(0)
   return (
     <group
       ref={group}
-      onPointerMove={(e) => { const id = pick(e); if (id !== get().hoverId) useStore.setState({ hoverId: id }) }}
+      onPointerMove={(e) => {
+        const now = performance.now()
+        if (now - lastMove.current < 25) return
+        lastMove.current = now
+        const id = pick(e)
+        if (id !== get().hoverId) useStore.setState({ hoverId: id })
+      }}
       onPointerOut={() => useStore.setState({ hoverId: null })}
       onClick={(e) => { if (e.delta > 4) return; const id = pick(e); if (id) { e.stopPropagation(); get().select(id) } }}
     >
       {pieces.map((p, i) => (
         <mesh key={p.e.id} ref={(m) => { meshes.current[i] = m }} geometry={p.geo} material={mats[i]}
-          position={p.e.assembledPosition} userData={{ i }} visible={false} />
+          position={p.e.assembledPosition} userData={{ i }} visible={initOps[i] > 0.01} />
       ))}
-      {world.garment && <mesh ref={garment} geometry={world.garment} material={garmentMat} visible={false} />}
+      {world.garment && <mesh ref={garment} geometry={world.garment} material={garmentMat} visible={initOps[skinIdx] > 0.01} />}
     </group>
   )
 }
@@ -275,7 +321,7 @@ function Compass() {
 function Ground() {
   const ref = useRef<any>(null)
   useFrame(() => { if (ref.current) { const s = useStore.getState(); ref.current.visible = s.explode < 0.02 && !s.region && !s.organ } })
-  return <ContactShadows ref={ref} frames={90} position={[0, 0.001, 0]} opacity={0.18} scale={3} blur={3} far={1.2} />
+  return <ContactShadows ref={ref} frames={1} position={[0, 0.001, 0]} opacity={0.18} scale={3} blur={3} far={1.2} />
 }
 
 /**
