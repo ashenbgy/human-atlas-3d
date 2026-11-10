@@ -3,10 +3,12 @@ import { useFrame, useThree } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { ContactShadows, Environment, GizmoHelper, Lightformer, OrbitControls } from '@react-three/drei'
 import { EffectComposer, N8AO } from '@react-three/postprocessing'
-import { Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, Matrix4, MOUSE, TOUCH, Mesh, MeshStandardMaterial, PerspectiveCamera, Ray, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
+import { BatchedMesh, Box3, CanvasTexture, DoubleSide, FrontSide, Color, Group, MathUtils, Matrix4, MOUSE, TOUCH, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, PerspectiveCamera, Plane, Ray, Raycaster, Spherical, SRGBColorSpace, Vector2, Vector3 } from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { cam, currentBox, viewBox } from './camera'
-import { focus, sheet, world } from './data'
+import { focus, isSkinSurface, sheet, world } from './data'
+import type { Garment } from './data'
+import type { Piece } from './data'
 import { easeInOutCubic } from './lib'
 import { useStore } from './store'
 import { LAYERS, SYSTEMS } from './types'
@@ -110,6 +112,91 @@ function tissue(name: string, system: string, fallback: string, region: string):
 }
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v))
+const GHOST = 0.09 // opacity of everything else while a structure is selected
+
+/** Skin gets a soft sheen (a stand-in for light scattering under the surface); other tissue stays standard. */
+const SKIN = { roughness: 0.55, sheen: 0.45, sheenRoughness: 0.5, sheenColor: new Color('#ffcbb0') }
+const tissueMaterial = (sys: string, params: ConstructorParameters<typeof MeshStandardMaterial>[0]) =>
+  sys === 'skin' ? new MeshPhysicalMaterial({ ...params, ...SKIN }) : new MeshStandardMaterial(params)
+
+/**
+ * The generated hair is cut along a smooth hairline in the fragment shader (the skin's triangles are too coarse for a
+ * clean edge): forehead at 1.615 m sweeping down to the nape at 1.47 m, with an oval cut-out so it tucks behind each ear. Body coordinates.
+ */
+const HAIRLINE = `
+  float hl = 1.615 - 0.145 * clamp((-0.01 - vBodyPos.z) / 0.12, 0.0, 1.0);
+  vec2 ear = vec2((vBodyPos.y - 1.555) / 0.045, (vBodyPos.z + 0.05) / 0.035); // oval around each ear
+  if (vBodyPos.y < hl || (abs(vBodyPos.x) > 0.07 && dot(ear, ear) < 1.0)) discard;`
+
+/** Fabric with a cloth sheen, hair with a soft glossy sheen; both fade with the skin. */
+function garmentMaterial(g: Garment) {
+  const params = g.kind === 'hair'
+    ? { color: '#3a281d', roughness: 0.45, sheen: 1, sheenRoughness: 0.3, sheenColor: new Color('#a07a5c') }
+    : { color: '#2E3B44', roughness: 0.85, sheen: 1, sheenRoughness: 0.6, sheenColor: new Color('#7d8f9b') }
+  const planes = g.clip ? [new Plane(new Vector3(0, 1, 0)), new Plane(new Vector3(0, -1, 0)), ...(g.clip.x ? [new Plane(new Vector3(-1, 0, 0)), new Plane(new Vector3(1, 0, 0))] : [])] : []
+  const mat = new MeshPhysicalMaterial({ ...params, metalness: 0, side: DoubleSide, transparent: true, opacity: 0, clippingPlanes: planes })
+  if (g.kind === 'hair') {
+    const offset = new Vector3() // how far the body has moved from its assembled position (explode)
+    mat.userData.offset = offset
+    mat.customProgramCacheKey = () => 'hairline'
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uOffset = { value: offset }
+      sh.vertexShader = 'uniform vec3 uOffset;\nvarying vec3 vBodyPos;\n' + sh.vertexShader.replace('#include <project_vertex>',
+        '#include <project_vertex>\n  vBodyPos = (modelMatrix * vec4(transformed, 1.0)).xyz - uOffset;')
+      sh.fragmentShader = 'varying vec3 vBodyPos;\n' + sh.fragmentShader.replace('void main() {', 'void main() {' + HAIRLINE)
+    }
+  }
+  return mat
+}
+/** Hems and the hairline are in body coordinates; move them with the body when it is exploded. */
+function placeHems(g: Garment, mat: MeshPhysicalMaterial, dx: number, dy: number, dz: number) {
+  mat.userData.offset?.set(dx, dy, dz)
+  if (!g.clip) return
+  const [lo, hi] = g.clip.y, p = mat.clippingPlanes!
+  p[0].constant = -(lo + dy)
+  p[1].constant = hi + dy
+  if (g.clip.x) { p[2].constant = g.clip.x + dx; p[3].constant = g.clip.x - dx }
+}
+
+/**
+ * Drawing ~2,200 pieces as separate meshes costs ~2,200 draw calls per frame, which is what made rotation slow.
+ * Settled pieces are drawn through one BatchedMesh per system instead (one draw call each): a solid batch for
+ * fully visible pieces and a see-through batch for dimmed ones. Only pieces that are fading, hovered, selected or
+ * on a partly peeled layer fall back to their own mesh. The per-piece meshes stay in the scene as click targets.
+ */
+interface Batches { solid: BatchedMesh[]; ghost: BatchedMesh[]; solidOf: BatchedMesh[]; ghostOf: BatchedMesh[]; inst: Int32Array }
+function buildBatches(pieces: Piece[], mats: MeshStandardMaterial[], initOps: number[]): Batches | null {
+  try {
+    const bySys = new Map<string, number[]>()
+    pieces.forEach((p, i) => { const l = bySys.get(p.e.system) ?? []; l.push(i); bySys.set(p.e.system, l) })
+    const out: Batches = { solid: [], ghost: [], solidOf: [], ghostOf: [], inst: new Int32Array(pieces.length) }
+    const m = new Matrix4()
+    for (const [sys, idx] of bySys) {
+      let verts = 0, inds = 0
+      for (const i of idx) { verts += pieces[i].geo.getAttribute('position').count; inds += pieces[i].geo.index?.count ?? 0 }
+      const base = { roughness: sys === 'skeleton' ? 0.75 : 0.42, metalness: 0, side: sys === 'skin' ? DoubleSide : FrontSide }
+      const solid = new BatchedMesh(idx.length, verts, inds, tissueMaterial(sys, base))
+      const ghost = new BatchedMesh(idx.length, verts, inds, tissueMaterial(sys, { ...base, transparent: true, opacity: GHOST, depthWrite: false }))
+      for (const b of [solid, ghost]) {
+        b.raycast = () => {} // clicks go to the per-piece meshes
+        for (const i of idx) {
+          const id = b.addInstance(b.addGeometry(pieces[i].geo))
+          out.inst[i] = id // same order in both batches, so the ids match
+          b.setColorAt(id, mats[i].color)
+          b.setMatrixAt(id, m.makeTranslation(...pieces[i].e.assembledPosition))
+          b.setVisibleAt(id, b === solid && initOps[i] === 1)
+        }
+      }
+      for (const i of idx) { out.solidOf[i] = solid; out.ghostOf[i] = ghost }
+      out.solid.push(solid)
+      out.ghost.push(ghost)
+    }
+    return out
+  } catch (err) {
+    console.warn('Batched rendering unavailable; drawing pieces individually.', err)
+    return null
+  }
+}
 
 function Specimens() {
   const pieces = world.pieces
@@ -130,7 +217,7 @@ function Specimens() {
       c.offsetHSL((Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.07) // per-piece variation
       const op = initOps[i]
       const tr = op < 1
-      return new MeshStandardMaterial({
+      return tissueMaterial(sys, {
         color: c, roughness: sys === 'skeleton' ? 0.75 : 0.42, metalness: 0,
         transparent: tr, opacity: op, depthWrite: !tr, emissive: HILITE, emissiveIntensity: 0,
         side: sys === 'skin' ? DoubleSide : FrontSide, // the skin surface is inside-out in BodyParts3D
@@ -138,10 +225,13 @@ function Specimens() {
     }),
     [pieces, initOps],
   )
+  const batches = useMemo(() => buildBatches(pieces, mats, initOps), [pieces, mats, initOps])
   const group = useRef<Group>(null)
-  const skinIdx = useMemo(() => pieces.findIndex((p) => p.e.system === 'skin' && /integumentary/i.test(p.e.name)), [pieces])
-  const garment = useRef<Mesh>(null)
-  const garmentMat = useMemo(() => new MeshStandardMaterial({ color: '#2E3B44', roughness: 0.9, side: DoubleSide, transparent: true, opacity: 0 }), [])
+  const skinIdx = useMemo(() => pieces.findIndex(isSkinSurface), [pieces])
+  const garments = useRef<(Mesh | null)[]>([])
+  const garmentMats = useMemo(() => world.garments.map(garmentMaterial), [])
+  const gl = useThree((s) => s.gl)
+  useEffect(() => { gl.localClippingEnabled = true }, [gl]) // hems are cut with clipping planes
   const camera = useThree((s) => s.camera)
   useEffect(() => {
     const ray = new Raycaster()
@@ -155,7 +245,10 @@ function Specimens() {
   const meshes = useRef<(Mesh | null)[]>([])
   const st = useMemo(() => ({
     op: Float32Array.from(initOps), em: new Float32Array(n), hit: Uint8Array.from(initOps, (o) => (o > 0.05 ? 1 : 0)), ex: 0, rt: 0, lastE: 0, lastR: 0,
-  }), [n, initOps])
+    // 0 = hidden, 1 = own mesh, 2 = solid batch, 3 = ghost batch
+    mode: Uint8Array.from(initOps, (o) => (o === 1 && batches ? 2 : o > 0.01 ? 1 : 0)),
+  }), [n, initOps, batches])
+  const tmp = useMemo(() => new Matrix4(), [])
 
   const invMat = useMemo(() => new Matrix4(), [])
   const localRay = useMemo(() => new Ray(), [])
@@ -199,6 +292,11 @@ function Specimens() {
         const sp = r > 0 ? sheet.pos.get(p.id) : undefined
         if (sp) { px += (sp[0] - px) * r; py += (sp[1] - py) * r; pz += (sp[2] - pz) * r }
         m.position.set(px, py, pz)
+        if (batches) {
+          tmp.makeTranslation(px, py, pz)
+          batches.solidOf[i].setMatrixAt(batches.inst[i], tmp)
+          batches.ghostOf[i].setMatrixAt(batches.inst[i], tmp)
+        }
       }
       let target = s.systems[p.system] ? 1 : 0
       const layer = s.organ ? 1 : skinCover && layerOf[i] !== 'skin' && p.id !== s.selectedId ? 0 : s.layers[layerOf[i]]
@@ -211,7 +309,6 @@ function Specimens() {
       if (Math.abs(target - st.op[i]) < 0.003) st.op[i] = target
       else fading = true
       const o = st.op[i], mat = mats[i]
-      m.visible = o > 0.01
       st.hit[i] = o > 0.05 && layer >= 0.5 ? 1 : 0 // peeled-back layers are click-through
       const isSel = p.id === s.selectedId
       // The selected piece joins the transparent pass (fully opaque, drawn last, ignoring depth) so the faded
@@ -232,17 +329,33 @@ function Specimens() {
         mat.emissiveIntensity = st.em[i]
         fading = true
       }
-      if (i === skinIdx && garment.current) {
-        // shorts follow the skin, but stay opaque even when the skin is see-through
-        const g = garment.current, go = Math.min(1, o * 4)
-        g.position.copy(m.position)
-        g.visible = go > 0.01
-        if (garmentMat.opacity !== go) {
-          garmentMat.opacity = go
-          const tr = go < 1
-          garmentMat.depthWrite = !tr
-          if (garmentMat.transparent !== tr) { garmentMat.transparent = tr; garmentMat.needsUpdate = true }
+      // who draws this piece: a batch when it is settled and plain, otherwise its own mesh
+      const plain = !isSel && st.em[i] === 0 && batches
+      const mode = o <= 0.01 ? 0 : plain && o === 1 ? 2 : plain && Math.abs(o - GHOST) < 1e-4 ? 3 : 1
+      if (mode !== st.mode[i]) {
+        st.mode[i] = mode
+        if (batches) {
+          batches.solidOf[i].setVisibleAt(batches.inst[i], mode === 2)
+          batches.ghostOf[i].setVisibleAt(batches.inst[i], mode === 3)
         }
+      }
+      m.visible = mode === 1
+      if (i === skinIdx) {
+        // clothing and hair follow the skin, but stay opaque even when the skin is see-through
+        const go = Math.min(1, o * 4), S = p.assembledPosition
+        world.garments.forEach((gd, gi) => {
+          const g = garments.current[gi], gm = garmentMats[gi]
+          if (!g) return
+          g.position.copy(m.position)
+          g.visible = go > 0.01
+          if (g.visible) placeHems(gd, gm, m.position.x - S[0], m.position.y - S[1], m.position.z - S[2])
+          if (gm.opacity !== go) {
+            gm.opacity = go
+            const tr = go < 1
+            gm.depthWrite = !tr
+            if (gm.transparent !== tr) { gm.transparent = tr; gm.needsUpdate = true }
+          }
+        })
       }
     }
     if (moving || fading) markBusy()
@@ -270,9 +383,14 @@ function Specimens() {
     >
       {pieces.map((p, i) => (
         <mesh key={p.e.id} ref={(m) => { meshes.current[i] = m }} geometry={p.geo} material={mats[i]}
-          position={p.e.assembledPosition} userData={{ i }} visible={initOps[i] > 0.01} />
+          position={p.e.assembledPosition} userData={{ i }} visible={st.mode[i] === 1} />
       ))}
-      {world.garment && <mesh ref={garment} geometry={world.garment} material={garmentMat} visible={initOps[skinIdx] > 0.01} />}
+      {batches?.solid.map((b) => <primitive key={b.uuid} object={b} />)}
+      {batches?.ghost.map((b) => <primitive key={b.uuid} object={b} />)}
+      {world.garments.map((g, gi) => (
+        <mesh key={gi} ref={(m) => { garments.current[gi] = m }} geometry={g.geo} material={garmentMats[gi]} visible={false}
+          raycast={() => {}} />
+      ))}
     </group>
   )
 }

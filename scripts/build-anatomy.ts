@@ -13,45 +13,22 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { Document, NodeIO } from '@gltf-transform/core'
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions'
-import { meshopt, weld } from '@gltf-transform/functions'
-import { MeshoptEncoder } from 'meshoptimizer'
-import { ATLAS_CENTER, layoutAtlas, sideOf } from '../src/lib'
+import { sideOf } from '../src/lib'
 import type { Entry, SystemId, Vec3 } from '../src/types'
+import { MeshoptSimplifier } from 'meshoptimizer'
+import { classify, regionOf, simplify, writeOutput } from './common'
+import type { Built } from './common'
 
 const raw = process.argv[2] ?? 'assets/anatomy/raw'
 const out = process.argv[3] ?? 'public/anatomy'
 const MM = 0.001
+// fraction of triangles kept per mesh: muscles keep their fibre striations, the skin is one large visible surface,
+// and fine detail on vessels, nerves, bones and organs barely shows at viewing distance
+const KEEP = 0.3, KEEP_MUSCLE = 0.5, KEEP_SKIN = 0.7
 
 const walk = (d: string): string[] =>
   fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
 
-// First matching rule wins. Order matters (e.g. brain ventricles before heart ventricles).
-const RULES: [SystemId, RegExp][] = [
-  ['endocrine', /(adrenal|suprarenal) gland|thyroid gland|parathyroid|pituitary|pineal|hypophysis/i],
-  ['skin', /integumentary|\bskin\b|hair of|eyebrow|eyelash/i],
-  ['nervous', /brain|cerebr|cerebell|lateral ventricle|third ventricle|fourth ventricle|spinal cord|nerve(?!.*eye)|ganglion|plexus|gyrus|thalam|medulla|\bpons\b|midbrain|hippocamp|amygdal|corpus callosum|caudate|putamen|globus|fornix|brainstem|(frontal|parietal|occipital|temporal|limbic) lobe|lobule|insula|colliculus|geniculate|mammillary|habenula|commissure|internal capsule|lamina terminalis|stria terminalis|archicortex|metencephalon|telencephalon|neuraxis|decussation|dura mater|subarachnoid/i],
-  ['sensory', /eyeball|\beye\b|cornea|\biris\b|retina|\blens\b|sclera|choroid|vitreous|cochlea|semicircular|tympanic membrane|auricle|\btongue\b|olfactory|optic|eyelid/i],
-  ['heart', /\bheart\b|ventricle|atrium|atrial|cardiac|mitral|tricuspid|papillary|chordae|myocardi|pericardi|endocardi|cusp of (pulmonary|aortic) valve|pulmonary valve|coronary sinus/i],
-  ['respiratory', /\blung|bronch|trachea|larynx|pleura|alveol|epiglottis|nasal cavity|vocal ligament|conus elasticus|thyro-epiglottic|cricothyroid ligament|internal nose|nasal septum/i],
-  ['arteries', /\bartery\b|arteries|aorta|aortic|arteriole|arteria\b|arterial|palmar arch|celiac trunk|thyrocervical trunk|costocervical trunk/i],
-  ['veins', /\bvein\b|veins|vena cava|venous/i],
-  ['muscles', /muscle|brachii|femoris|gracilis|sartorius|deltoid|pectoralis|trapezius|latissimus|gluteus|gastrocnemius|soleus|\brectus\b|oblique|iliacus|psoas|masseter|temporalis|sternocleidomastoid|tendon|aponeurosis|serratus|rhomboid|teres|supraspinatus|infraspinatus|subscapularis|brachialis|brachioradialis|pronator|supinator|flexor|extensor|abductor|adductor|lumbrical|interosse|opponens|tibialis|peroneus|fibularis|plantaris|popliteus|semimembranosus|semitendinosus|vastus|tensor fasciae|pectineus|piriformis|obturator|gemellus|quadratus|diaphragm|levator|platysma|buccinator|orbicularis|zygomaticus|mentalis|digastric|omohyoid|sternohyoid|thyrohyoid|splenius|longissimus|iliocostalis|multifidus|erector|obliquus|scalenus|spinalis|rotator|intertransvers|interspinal|longus (capitis|colli)|subclavius|sternothyroid|transversus thoracis|palmaris|anconeus|coccygeus|puborectalis|genioglossus|hyoglossus|constrictor|stylopharyngeus|palatopharyngeus|salpingopharyngeus|tensor veli|vocalis|arytenoid|cricothyroid|aryepiglotticus/i],
-  ['lymphatic', /spleen|thymus|lymph|tonsil/i],
-  ['digestive', /esophag|stomach|duoden|jejun|ileum|cecum|appendix|colon|rectum|anal canal|\bliver\b|hepatic duct|biliary|gallbladder|cystic duct|pancrea|mesentery|taenia|tooth|gingiva|salivary|submandibular gland|sublingual gland|parotid|pharyn|uvula/i],
-  ['urinary', /kidney|ureter|urinary bladder|urethra/i],
-  ['reproductive', /testis|epididym|deferent duct|seminal vesicle|prostate|penis|corpus cavernosum|corpus spongiosum|scrot/i],
-  ['connective', /fascia|ligament|raphe|tendinous ring|retinaculum/i],
-  ['skeleton', /bone|vertebra|\brib\b|sternum|skull|cranium|femur|tibia|fibula|humerus|\bradius|\bulna|scapula|clavicle|patella|phalanx|phalanges|metacarpal|metatarsal|carpal|tarsal|sacrum|coccyx|mandible|maxilla|hyoid|talus|calcaneus|cuneiform|cuboid|navicular|scaphoid|lunate|triquetr|pisiform|trapezium|trapezoid|capitate|hamate|ilium|ischium|pubis|cartilage|sphenoid|ethmoid|vomer|palatine|lacrimal|malleus|incus|stapes|\batlas\b|\baxis\b|pelvic girdle/i],
-]
-const REGION_RULES: [string, RegExp][] = [
-  ['brain', /brain|cerebr|cerebell|gyrus|thalam|medulla|\bpons\b|midbrain|hippocamp|amygdal|corpus callosum|caudate|putamen|globus|fornix|ventricle of brain|lateral ventricle|third ventricle|fourth ventricle/i],
-  ['hand', /\bhand\b|finger|thumb|metacarpal|carpal|scaphoid|lunate|triquetr|pisiform|trapezium|trapezoid|capitate|hamate|lumbrical|opponens/i],
-  ['foot', /\bfoot\b|\btoe|metatarsal|tarsal|talus|calcaneus|cuneiform|cuboid|navicular|hallux/i],
-  ['shoulder', /shoulder|scapula|clavicle|deltoid|supraspinatus|infraspinatus|subscapularis|\bteres|acromi|glenoid/i],
-  ['thigh', /thigh|femur|femoris|femoral|gracilis|sartorius|vastus|adductor|pectineus|semimembranosus|semitendinosus|patella/i],
-]
 
 function parseObj(file: string) {
   const v: number[] = []
@@ -91,6 +68,8 @@ for (const c of concepts.values()) for (const id of c.ids) {
 const objs = files.filter((f) => f.toLowerCase().endsWith('.obj'))
 if (!objs.length) { console.error(`No .obj files under ${raw}. Download BodyParts3D first (see README).`); process.exit(1) }
 
+await MeshoptSimplifier.ready
+
 // ---- 2. parse + classify ----
 type P = { id: string; name: string; system: SystemId; v: number[]; idx: number[] }
 const parts: P[] = []
@@ -99,11 +78,11 @@ for (const f of objs) {
   const id = path.basename(f, path.extname(f)).toUpperCase()
   const name = names.get(id)
   if (!name) { unclassified.push(`${id}\tno name in tables`); continue }
-  const rule = RULES.find(([, re]) => re.test(name))
-  if (!rule) { unclassified.push(`${id}\t${name}\tno system rule matched`); continue }
+  const system = classify(name)
+  if (!system) { unclassified.push(`${id}\t${name}\tno system rule matched`); continue }
   const { v, idx } = parseObj(f)
   if (!idx.length) { unclassified.push(`${id}\t${name}\tempty mesh`); continue }
-  parts.push({ id, name: name.replace(/\b[a-z]/g, (c) => c.toUpperCase()), system: rule[0], v, idx })
+  parts.push({ id, name: name.replace(/\b[a-z]/g, (c) => c.toUpperCase()), system, v, idx })
 }
 
 // ---- 3. normalise to metres, feet on y=0, centred on x/z ----
@@ -116,7 +95,6 @@ for (const p of parts) for (let i = 0; i < p.v.length; i += 3) {
 const off = [(lo[0] + hi[0]) / 2, lo[1], (lo[2] + hi[2]) / 2]
 const H = hi[1] - lo[1]
 
-type Built = { e: Entry; pos: Float32Array; idx: Uint32Array }
 const built: Built[] = parts.map((p) => {
   const w = new Float32Array(p.v.length)
   const l = [Infinity, Infinity, Infinity], h = [-Infinity, -Infinity, -Infinity]
@@ -126,12 +104,14 @@ const built: Built[] = parts.map((p) => {
   }
   const c: Vec3 = [(l[0] + h[0]) / 2, (l[1] + h[1]) / 2, (l[2] + h[2]) / 2]
   for (let i = 0; i < w.length; i += 3) for (let k = 0; k < 3; k++) w[i + k] -= c[k]
-  const region = p.system === 'heart' ? 'heart' : REGION_RULES.find(([, re]) => re.test(p.name))?.[0] ?? (c[1] > 0.85 * H ? 'head' : 'body')
+  const region = regionOf(p.name, p.system, c[1], H)
   const e: Entry = {
     id: p.id, name: p.name, system: p.system, region, side: sideOf(p.name), meshFile: `${p.system}.glb`,
     assembledPosition: c, explodedPosition: [0, 0, 0], size: [h[0] - l[0], h[1] - l[1], h[2] - l[2]],
   }
-  return { e, pos: w, idx: Uint32Array.from(p.idx) }
+  // simplify: the "99% reduced" archive is still ~6M triangles; the skin is one large visible surface, so keep more of it
+  const s = simplify(w, Uint32Array.from(p.idx), /integumentary/i.test(p.name) ? KEEP_SKIN : p.system === 'muscles' ? KEEP_MUSCLE : KEEP)
+  return { e, pos: s.pos, idx: s.idx }
 })
 
 // ---- side for mirrored pairs (FJn / FJnM): names rarely say left/right, so use x position,
@@ -148,29 +128,5 @@ for (const b of built) {
 }
 console.log(`side convention: left = ${leftIsPositiveX ? '+x' : '-x'} (votes ${vote})`)
 
-// ---- 4. atlas layout ----
-layoutAtlas(built.map((b) => b.e.size)).forEach((p, i) => {
-  built[i].e.explodedPosition = [p[0] + ATLAS_CENTER[0], p[1] + ATLAS_CENTER[1], p[2] + ATLAS_CENTER[2]]
-})
-
-// ---- 5. GLBs (one per system) ----
-await MeshoptEncoder.ready
-const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.encoder': MeshoptEncoder })
-fs.mkdirSync(out, { recursive: true })
-for (const sys of new Set(built.map((b) => b.e.system))) {
-  const doc = new Document()
-  const buf = doc.createBuffer()
-  const scene = doc.createScene()
-  for (const b of built.filter((b) => b.e.system === sys)) {
-    const prim = doc.createPrimitive()
-      .setAttribute('POSITION', doc.createAccessor().setType('VEC3').setArray(b.pos).setBuffer(buf))
-      .setIndices(doc.createAccessor().setType('SCALAR').setArray(b.idx).setBuffer(buf))
-    scene.addChild(doc.createNode(b.e.id).setMesh(doc.createMesh(b.e.id).addPrimitive(prim)))
-  }
-  await doc.transform(weld(), meshopt({ encoder: MeshoptEncoder, level: 'medium' }))
-  await io.write(path.join(out, `${sys}.glb`), doc)
-}
-
-fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify({ source: 'BodyParts3D', pieces: built.map((b) => b.e) }))
-fs.writeFileSync('scripts/unclassified.log', unclassified.join('\n'))
-console.log(`${built.length} pieces written, ${unclassified.length} unclassified (scripts/unclassified.log)`)
+// ---- 4. atlas layout, GLBs (one per system), manifest ----
+await writeOutput(built, out, 'BodyParts3D', unclassified, 'scripts/unclassified.log')

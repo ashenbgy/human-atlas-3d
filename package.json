@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "build:anatomy": "tsx scripts/build-anatomy.ts"
+    "build:anatomy": "tsx scripts/build-anatomy.ts",
+    "build:female": "tsx scripts/build-female.ts"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.0",

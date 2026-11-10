@@ -103,3 +103,8 @@ dl { margin:0 0 12px } dl div { display:flex; justify-content:space-between; pad
   .organs { top:84px; left:16px; right:16px; transform:none; max-width:none }
   .left { top:136px; max-height:calc(100% - 340px) }
 }
+
+/* male / female switch under the title */
+.body-switch { display:flex; gap:12px; margin-top:6px; pointer-events:auto }
+.body-switch button { font-size:11px; color:var(--mut); padding:1px 0; border-bottom:1.5px solid transparent; transition:color .15s,border-color .15s }
+.body-switch button:hover { color:var(--ink) } .body-switch button.on { color:var(--ink); font-weight:600; border-color:var(--ink) }

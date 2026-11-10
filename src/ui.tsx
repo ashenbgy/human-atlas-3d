@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { cam } from './camera'
 import type { ViewId } from './camera'
-import { world } from './data'
+import { BODY, world } from './data'
 import { DEFAULT_SYSTEMS, ORGAN_SYSTEMS, organMembers, regionCount, useStore } from './store'
 import { LAYERS, ORGANS, REGIONS, SYSTEMS } from './types'
 import type { Entry } from './types'
@@ -43,7 +43,15 @@ export function Branding() {
     <motion.div className="brand" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6 }}>
       <div className="eyebrow">INTERACTIVE ANATOMY</div>
       <h1>Human Atlas<sup>3D</sup></h1>
-      <div className="meta">{world.pieces.length} modeled pieces · {world.placeholder ? 'placeholder geometry' : 'BodyParts3D'}</div>
+      <div className="meta">{world.pieces.length} modeled pieces · {world.placeholder ? 'placeholder geometry' : world.source}</div>
+      <div className="body-switch" role="group" aria-label="Body">
+        {(['male', 'female'] as const).map((b) => (
+          <button key={b} className={BODY === b ? 'on' : ''} aria-pressed={BODY === b}
+            onClick={() => { if (BODY !== b) location.search = b === 'female' ? '?body=female' : '' }}>
+            {b === 'male' ? 'Male' : 'Female'}
+          </button>
+        ))}
+      </div>
     </motion.div>
   )
 }
@@ -139,7 +147,7 @@ export function Collections() {
         <>
           <p className="sub">Study the body, region by region.</p>
           <div className="grid2">
-            {REGIONS.map((r) => (
+            {REGIONS.filter((r) => regionCount(r) > 0).map((r) => (
               <button key={r} className={'rb' + (region === r ? ' on' : '')} onClick={() => setRegion(r)}>
                 <span>{r[0].toUpperCase() + r.slice(1)}</span><em>{regionCount(r)}</em>
               </button>
@@ -256,7 +264,7 @@ function infoText(e: Entry, cat: string) {
   const side = e.side === 'midline' ? 'on the midline' : `on the ${e.side} side`
   return world.placeholder
     ? `Placeholder shape standing in for the ${e.name.toLowerCase()} (${cat.toLowerCase()}). Replace it by building the BodyParts3D assets.`
-    : `${cat} of the ${e.region} region, ${side}. Geometry from BodyParts3D; use Isolate to study it on its own.`
+    : `${cat} of the ${e.region} region, ${side}. Geometry from ${world.source}; use Isolate to study it on its own.`
 }
 
 export function Tooltip() {

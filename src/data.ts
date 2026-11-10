@@ -12,14 +12,28 @@ import { ORGANS } from './types'
 
 export interface Piece { e: Entry; geo: BufferGeometry }
 
+/**
+ * A garment is a strip of the skin surface lifted off it. `clip` is the exact hem (world heights, plus an
+ * optional |x| limit); the triangles are cut a little wider and clipping planes trim them to a straight edge.
+ */
+export interface Garment { geo: BufferGeometry; kind: 'cloth' | 'hair'; clip?: { y: [number, number]; x?: number } }
+
+/** The whole-body skin surface: "Integumentary System" in BodyParts3D, "Skin" in the Human Reference Atlas. */
+export const isSkinSurface = (p: Piece) => p.e.system === 'skin' && /integumentary|^skin$/i.test(p.e.name)
+
+/** Which body to load: ?body=female selects the Human Reference Atlas female, otherwise the BodyParts3D male. */
+export const BODY: 'male' | 'female' = new URLSearchParams(location.search).get('body') === 'female' ? 'female' : 'male'
+const DATA = `${import.meta.env.BASE_URL}anatomy/${BODY === 'female' ? 'female/' : ''}`
+
 export const world = {
   pieces: [] as Piece[],
   byId: new Map<string, Piece>(),
   placeholder: false,
+  source: '',
   bodyBox: new Box3(),
   atlasBox: new Box3(),
-  /** Modesty shorts cut from the skin surface (skin-local coordinates), shown whenever the skin is. */
-  garment: null as BufferGeometry | null,
+  /** Clothing and generated hair, cut from the skin surface (skin-local coordinates), shown whenever the skin is. */
+  garments: [] as Garment[],
 }
 /** Current region specimen-sheet: piece id -> position. Only members are present. */
 export const sheet = { pos: new Map<string, Vec3>(), box: new Box3() }
@@ -49,19 +63,20 @@ function inflate(g: BufferGeometry, d: number, axis?: { x: number; z: number }) 
  * The skin surface is coarse, so: lift it 4 mm off the muscles, lift hair 8 mm (it sits on the scalp and
  * would otherwise vanish under the lifted skin), and cut a pair of shorts from the skin between thigh and waist.
  */
-function dressSkin(pieces: Piece[]) {
-  const skin = pieces.find((p) => p.e.system === 'skin' && /integumentary/i.test(p.e.name))
+function dressSkin(pieces: Piece[], female: boolean) {
+  const skin = pieces.find(isSkinSurface)
   if (!skin) return
   const S = skin.e.assembledPosition
+  const k = (S[1] + skin.e.size[1] / 2) / 1.719 // heights below were measured on the 1.72 m male body
   const axisFor = (p: Piece) => ({ x: S[0] - p.e.assembledPosition[0], z: S[2] - p.e.assembledPosition[2] })
-  // flatten the groin back to the line of the thigh fronts, so neither skin nor shorts show the genitals' shape
+  // flatten the male groin back to the line of the thigh fronts, so neither skin nor shorts show the genitals' shape
   const sp = skin.geo.getAttribute('position')
-  let thighs = -Infinity
+  let thighs = female ? Infinity : -Infinity
   for (let i = 0; i < sp.count; i++) {
     const ax = Math.abs(sp.getX(i) + S[0]), y = sp.getY(i) + S[1]
     if (y > 0.72 && y < 0.88 && ax > 0.04 && ax < 0.16) thighs = Math.max(thighs, sp.getZ(i) + S[2])
   }
-  if (thighs > -Infinity) {
+  if (!female && thighs > -Infinity) {
     const plane = thighs + 0.002
     for (let i = 0; i < sp.count; i++) {
       const x = sp.getX(i) + S[0], y = sp.getY(i) + S[1]
@@ -74,32 +89,73 @@ function dressSkin(pieces: Piece[]) {
 
   const g = skin.geo, pos = g.getAttribute('position'), nor = g.getAttribute('normal'), idx = g.getIndex()
   if (!idx || !nor) return
-  // waist to upper thigh; |x| < 0.2 m keeps the hanging hands and wrists out
-  const keep = (i: number) => { const y = pos.getY(i) + S[1], x = pos.getX(i) + S[0]; return y > 0.7 && y < 0.98 && Math.abs(x) < 0.2 }
-  const tris: number[] = []
-  for (let t = 0; t < idx.count; t += 3) {
-    const a = idx.getX(t), b = idx.getX(t + 1), c = idx.getX(t + 2)
-    if (keep(a) && keep(b) && keep(c)) tris.push(a, b, c)
-  }
   const P = new Float32Array(pos.count * 3), N = new Float32Array(pos.count * 3)
   for (let i = 0; i < pos.count; i++) {
     P.set([pos.getX(i), pos.getY(i), pos.getZ(i)], i * 3)
     N.set([nor.getX(i), nor.getY(i), nor.getZ(i)], i * 3)
   }
-  const shorts = new BufferGeometry()
-  shorts.setAttribute('position', new BufferAttribute(P, 3))
-  shorts.setAttribute('normal', new BufferAttribute(N, 3))
-  shorts.setIndex(tris)
-  shorts.computeBoundingBox()
-  shorts.computeBoundingSphere()
+  const wx = (i: number) => P[i * 3] + S[0], wy = (i: number) => P[i * 3 + 1] + S[1], wz = (i: number) => P[i * 3 + 2] + S[2]
+  /** The skin triangles whose three corners pass `keep`, as a new mesh with its own copy of the vertices. */
+  const cut = (keep: (i: number) => boolean) => {
+    const tris: number[] = []
+    for (let t = 0; t < idx.count; t += 3) {
+      const a = idx.getX(t), b = idx.getX(t + 1), c = idx.getX(t + 2)
+      if (keep(a) && keep(b) && keep(c)) tris.push(a, b, c)
+    }
+    const geo = new BufferGeometry()
+    geo.setAttribute('position', new BufferAttribute(P.slice(), 3))
+    geo.setAttribute('normal', new BufferAttribute(N.slice(), 3))
+    geo.setIndex(tris)
+    geo.computeBoundingBox()
+    geo.computeBoundingSphere()
+    return geo
+  }
+  const garments: Garment[] = []
+
+  // shorts: waist to upper thigh. The |x| limit keeps the hands out (measured: male hands from 0.25 m; female hips
+  // reach 0.21 m and her hands start beyond 0.25 m)
+  const shortsY: [number, number] = [0.7 * k, 0.98 * k]
+  const sx = female ? 0.23 : 0.2
+  const shorts = cut((i) => wy(i) > shortsY[0] - 0.03 && wy(i) < shortsY[1] + 0.03 && Math.abs(wx(i)) < sx)
   inflate(shorts, 0.007, axisFor(skin)) // 11 mm off the original skin in total
-  // the flattened groin is folded underneath; give it one forward-facing normal so the fabric shades as a smooth panel
-  const zone = (i: number) => { const x = P[i * 3] + S[0], y = P[i * 3 + 1] + S[1]; return y > 0.7 && y < 0.88 && Math.abs(x) < 0.08 }
-  let front = 0 // which way do this mesh's normals face on the front of the body? (it is wound inside-out)
-  for (let i = 0; i < pos.count; i++) if (!zone(i) && P[i * 3 + 2] + S[2] > 0.06) front += N[i * 3 + 2]
-  const nz = front >= 0 ? 1 : -1
-  for (let i = 0; i < pos.count; i++) if (zone(i) && P[i * 3 + 2] + S[2] > 0.03) N.set([0, 0, nz], i * 3)
-  world.garment = shorts
+  if (!female) {
+    // the flattened groin is folded underneath; give it one forward-facing normal so the fabric shades as a smooth panel
+    const sn = shorts.getAttribute('normal')
+    const zone = (i: number) => wy(i) > 0.7 && wy(i) < 0.88 && Math.abs(wx(i)) < 0.08
+    let front = 0 // which way do this mesh's normals face on the front of the body? (it is wound inside-out)
+    for (let i = 0; i < sn.count; i++) if (!zone(i) && wz(i) > 0.06) front += sn.getZ(i)
+    const nz = front >= 0 ? 1 : -1
+    for (let i = 0; i < sn.count; i++) if (zone(i) && wz(i) > 0.03) sn.setXYZ(i, 0, 0, nz)
+  }
+  garments.push({ geo: shorts, kind: 'cloth', clip: { y: shortsY } })
+
+  if (female) {
+    // top over the measured bust band; |x| < 0.15 m stays on the torso where the arms touch it
+    const top = cut((i) => wy(i) > 1.05 && wy(i) < 1.3 && Math.abs(wx(i)) < 0.17)
+    inflate(top, 0.007, axisFor(skin))
+    garments.push({ geo: top, kind: 'cloth', clip: { y: [1.08, 1.27], x: 0.15 } })
+
+    // hair: the Human Reference Atlas has none, so lift the scalp off the head. The hairline sits at the forehead
+    // (~1.615 m) and sweeps down past the ears to the nape (~1.47 m); the hair is fuller on the crown.
+    // (the exact, smooth hairline is cut in the hair shader with the same curve: see HAIRLINE in Scene.tsx)
+    const hairline = (z: number) => 1.615 - 0.145 * Math.min(1, Math.max(0, (-0.01 - z) / 0.12))
+    const hair = cut((i) => wy(i) > 1.43 && wy(i) > hairline(wz(i)) - 0.02 && Math.abs(wx(i)) < 0.12)
+    const hp = hair.getAttribute('position'), hn = hair.getAttribute('normal')
+    const head = new Vector3(0, 1.55, -0.05) // centre of the head, world
+    let out = 0
+    for (let i = 0; i < hp.count; i++) out += (wx(i) - head.x) * hn.getX(i) + (wy(i) - head.y) * hn.getY(i) + (wz(i) - head.z) * hn.getZ(i)
+    const sgn = out >= 0 ? 1 : -1
+    for (let i = 0; i < hp.count; i++) {
+      const t = Math.min(1, Math.max(0, (wy(i) - hairline(wz(i))) / 0.05))
+      const d = sgn * (0.003 + 0.012 * t * t * (3 - 2 * t)) // 3 mm at the hairline to 15 mm on the crown
+      hp.setXYZ(i, hp.getX(i) + hn.getX(i) * d, hp.getY(i) + hn.getY(i) * d, hp.getZ(i) + hn.getZ(i) * d)
+    }
+    hair.computeVertexNormals()
+    hair.computeBoundingBox()
+    hair.computeBoundingSphere()
+    garments.push({ geo: hair, kind: 'hair' })
+  }
+  world.garments = garments
 }
 
 function processGeometry(o: Mesh): BufferGeometry {
@@ -212,14 +268,15 @@ function processGeometry(o: Mesh): BufferGeometry {
 export async function loadWorld() {
   let pieces: Piece[] = []
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}anatomy/manifest.json`)
-    const manifest = (await res.json()) as { pieces: Entry[] }
+    const res = await fetch(`${DATA}manifest.json`)
+    const manifest = (await res.json()) as { source?: string; pieces: Entry[] }
+    world.source = manifest.source ?? ''
     const geos = new Map<string, BufferGeometry>()
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
     const files = Array.from(new Set(manifest.pieces.map((p) => p.meshFile)))
     await Promise.all(
       files.map(async (file) => {
-        const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}anatomy/${file}`)
+        const gltf = await loader.loadAsync(`${DATA}${file}`)
         gltf.scene.updateMatrixWorld(true)
         gltf.scene.traverse((o) => {
           if (!(o as Mesh).isMesh) return
@@ -228,7 +285,7 @@ export async function loadWorld() {
       }),
     )
     pieces = manifest.pieces.filter((e) => geos.has(e.id)).map((e) => ({ e, geo: geos.get(e.id)! }))
-    dressSkin(pieces)
+    dressSkin(pieces, BODY === 'female')
     pieces = pieces.filter((p) => !/hair of trunk/i.test(p.e.name)) // pubic hair; covered by the shorts
   } catch (err) {
     console.warn('Anatomy assets failed to load; showing placeholder geometry.', err)
@@ -268,7 +325,8 @@ export const focus = { ids: new Set<string>(), box: new Box3() }
 
 export const organMembers = (id: OrganId) => {
   const o = ORGANS.find((x) => x.id === id)!
-  return world.pieces.filter((p) => (o.systems as readonly string[]).includes(p.e.system) && o.match.test(p.e.name))
+  // the brain is matched by region too: the female brain uses Allen atlas names ("basomedial nucleus", ...)
+  return world.pieces.filter((p) => (o.systems as readonly string[]).includes(p.e.system) && (o.match.test(p.e.name) || (o.id === 'brain' && p.e.region === 'brain')))
 }
 
 export function buildFocus(id: OrganId) {
